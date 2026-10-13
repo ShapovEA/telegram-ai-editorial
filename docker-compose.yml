@@ -1,0 +1,173 @@
+name: ai-smm
+
+x-backend: &backend
+  build:
+    context: ./backend
+  image: ai-smm-backend:latest
+  restart: unless-stopped
+  env_file: .env
+  environment: &backend-env
+    DATABASE_URL: postgresql+psycopg://smm:${POSTGRES_PASSWORD:-smm}@postgres:5432/smm
+    REDIS_URL: redis://:${REDIS_PASSWORD:-redissecret}@redis:6379/1
+    OLLAMA_URL: http://ollama:11434
+    SEARXNG_URL: http://searxng:8080
+    SANDBOX_URL: http://sandbox:8090
+  depends_on: &backend-deps
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  networks: [app, sandbox]
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.7-pg17-trixie
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: smm
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-smm}
+      POSTGRES_DB: smm
+      TZ: UTC
+      PGTZ: UTC
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - 127.0.0.1:5432:5432
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U smm -d smm"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    networks: [app]
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-redissecret}", "--maxmemory-policy", "noeviction", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    ports:
+      - 127.0.0.1:6379:6379
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redissecret}", "ping"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+    networks: [app]
+
+  ollama:
+    image: ollama/ollama:0.40.3
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c", "ollama serve & sleep 5 && ollama pull bge-m3 && wait"]
+    environment:
+      OLLAMA_KEEP_ALIVE: 24h
+      OLLAMA_NUM_PARALLEL: "2"
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - 127.0.0.1:11434:11434
+    healthcheck:
+      test: ["CMD-SHELL", "ollama show bge-m3 > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 60
+      start_period: 30s
+    networks: [app]
+
+  searxng:
+    image: searxng/searxng:2026.10.11-ad46ebd7d
+    restart: unless-stopped
+    environment:
+      SEARXNG_BASE_URL: http://localhost:8888/
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-ai-smm-searxng-secret}
+    volumes:
+      - ./infra/searxng/settings.yml:/etc/searxng/settings.yml:ro
+    ports:
+      - 127.0.0.1:8888:8080
+    networks: [app]
+
+  sandbox:
+    build:
+      context: ./sandbox
+    image: ai-smm-sandbox:latest
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m
+    mem_limit: 1g
+    pids_limit: 128
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      TMPDIR: /tmp
+    networks: [sandbox]
+
+  api:
+    <<: *backend
+    command: ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips '*'"]
+    ports:
+      - 127.0.0.1:8000:8000
+    depends_on:
+      <<: *backend-deps
+      ollama:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/health').status==200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  worker:
+    <<: *backend
+    command: ["taskiq", "worker", "app.worker.broker:broker", "app.worker.tasks", "--workers", "1", "--max-async-tasks", "12", "--ack-type", "when_executed"]
+    depends_on:
+      api:
+        condition: service_healthy
+
+  scheduler:
+    <<: *backend
+    command: ["taskiq", "scheduler", "app.worker.broker:scheduler", "app.worker.tasks", "--skip-first-run"]
+    depends_on:
+      api:
+        condition: service_healthy
+
+  bot:
+    <<: *backend
+    command: ["python", "-m", "app.bot.main"]
+    depends_on:
+      api:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+    image: ai-smm-frontend:latest
+    restart: unless-stopped
+    ports:
+      - 8080:80
+    depends_on:
+      - api
+    networks: [app]
+
+  rsshub:
+    image: diygod/rsshub:2026-10-12
+    restart: unless-stopped
+    profiles: ["rsshub"]
+    environment:
+      NODE_ENV: production
+      CACHE_TYPE: memory
+    ports:
+      - 127.0.0.1:1200:1200
+    networks: [app]
+
+networks:
+  app: {}
+  sandbox:
+    internal: true
+
+volumes:
+  pg_data:
+  redis_data:
+  ollama_data:

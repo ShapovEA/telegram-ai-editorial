@@ -1,0 +1,53 @@
+[project]
+name = "smm-department"
+version = "0.1.0"
+description = "AI-отдел для ведения Telegram-каналов: мультиагентная система на LangGraph"
+requires-python = ">=3.11"
+dependencies = [
+    "aiogram>=3.31.0",
+    "alembic>=1.20.0",
+    "ddgs>=9.16.0",
+    "email-validator>=2.3.0",
+    "fastapi>=0.143.0",
+    "feedparser>=6.0.14",
+    "httpx>=0.28.1",
+    "jiter>=0.17.0",
+    "langfuse>=4.17.0",
+    "langgraph>=1.2.14",
+    "langgraph-checkpoint-postgres>=3.1.2",
+    "numpy>=2.4.6",
+    "pgvector>=0.5.1",
+    "psycopg[binary,pool]>=3.3.6",
+    "pwdlib[argon2]>=0.3.1",
+    "pydantic-settings>=2.15.0",
+    "pyjwt>=2.15.1",
+    "pymorphy3>=2.0.6",
+    "pymorphy3-dicts-ru>=2.4.417150.4580142",
+    "redis>=8.1.0",
+    "sqlalchemy[asyncio]>=2.1.4",
+    "sse-starlette>=3.5.0",
+    "taskiq>=0.13.0",
+    "taskiq-redis>=1.2.4",
+    "trafilatura>=2.3.1",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.17.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 140
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501", "B008"]

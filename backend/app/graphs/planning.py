@@ -15,10 +15,9 @@ from app.domain.schemas import Brief, SmmSchedule, Strategy
 from app.graphs.common import block, join_blocks, node, output, system_prompt
 from app.graphs.context import build_ctx
 from app.llm.agent import ask
-from app.services import notify
 from app.services.embeddings import EmbeddingError, cosine, embed
 from app.services.novelty import classify_topic
-from app.services.schedule import label, smm_grid
+from app.services.schedule import label, smm_grid, to_local, to_utc
 from app.tools.search import web_search
 
 log = logging.getLogger(__name__)
@@ -158,10 +157,10 @@ async def collect_context(state: PlanState) -> dict:
             )
         ).scalars().all()
         kept = [{"id": k.id, "publish_at": k.publish_at.isoformat(), "rubric": k.rubric, "topic": k.topic} for k in kept_rows]
-    schedule = SmmSchedule.model_validate((await _schedule(state["channel_id"])) or {})
-    grid_times = smm_grid(schedule, week_start, not_before=datetime.now(UTC) + timedelta(hours=1))
-    kept_times = {k["publish_at"] for k in kept}
-    grid = [{"position": i + 1, "publish_at": t.isoformat(), "label": label(t, schedule.timezone)} for i, t in enumerate(t for t in grid_times if t.isoformat() not in kept_times)]
+    schedule = await _schedule(state["channel_id"])
+    kept_times = {k.publish_at for k in kept_rows}
+    local_times = [to_local(t, schedule.timezone) for t in smm_grid(schedule, week_start, not_before=datetime.now(UTC) + timedelta(hours=1)) if t not in kept_times]
+    grid = [{"position": i + 1, "local_at": t.isoformat(), "label": label(t)} for i, t in enumerate(local_times)]
     history, rubric_counts = await _history(state["channel_id"])
     ideas = await _ideas(state["channel_id"])
     brief = Brief.model_validate(ctx["brief"])
@@ -181,12 +180,12 @@ async def collect_context(state: PlanState) -> dict:
     return {"ctx": ctx, "grid": grid, "kept": kept, "context_text": text, "fix_attempts": 0, "comment": comment}
 
 
-async def _schedule(channel_id: int) -> dict:
+async def _schedule(channel_id: int) -> SmmSchedule:
     from app.db.models import Channel
 
     async with session_scope() as s:
         ch = await s.get(Channel, channel_id)
-        return ch.schedule if ch else {}
+        return SmmSchedule.model_validate((ch.schedule if ch else None) or {})
 
 
 @node("strategist_plan", "Стратег составляет план недели")
@@ -297,6 +296,7 @@ async def save_draft(state: PlanState) -> dict:
     issues_by_pos: dict[int, list] = {}
     for i in state.get("issues") or []:
         issues_by_pos.setdefault(i["position"], []).append({"code": "plan", "message": i["message"]})
+    timezone = (await _schedule(ctx["channel_id"])).timezone
     async with session_scope() as s:
         plan = await s.get(Plan, state["plan_id"])
         await s.execute(delete(Slot).where(Slot.plan_id == plan.id, Slot.status == SlotStatus.draft, Slot.locked.is_(False)))
@@ -304,7 +304,7 @@ async def save_draft(state: PlanState) -> dict:
         for d in state["draft"]:
             if not d.get("topic"):
                 continue
-            publish_at = datetime.fromisoformat(d["publish_at"])
+            publish_at = to_utc(datetime.fromisoformat(d["local_at"]), timezone)
             first = publish_at if first is None or publish_at < first else first
             warnings = issues_by_pos.get(d["position"], [])
             if d.get("related"):
@@ -345,13 +345,7 @@ def _rubric_format(ctx: dict, rubric: str | None) -> str:
 
 
 def route_after_save(state: PlanState) -> str:
-    return "approve_all" if state["ctx"]["publish_mode"] == "autopilot" else "notify_plan"
-
-
-@node("notify_plan", "План отправлен владельцу на утверждение")
-async def notify_plan(state: PlanState) -> dict:
-    await notify.notify_owner(state["ctx"]["channel_id"], "Контент-план на неделю готов и ждёт утверждения.", buttons=notify.link_buttons(f"/channels/{state['ctx']['channel_id']}/plan"))
-    return {}
+    return "approve_all" if state["ctx"]["publish_mode"] == "autopilot" else "await_plan"
 
 
 @node("await_plan", "Ожидание утверждения плана")
@@ -432,7 +426,6 @@ def build_planning_graph(checkpointer=None):
     g.add_node("plan_checks", plan_checks)
     g.add_node("strategist_fix", strategist_fix)
     g.add_node("save_draft", save_draft)
-    g.add_node("notify_plan", notify_plan)
     g.add_node("await_plan", await_plan)
     g.add_node("approve_all", approve_all)
     g.add_node("suggest_topics", suggest_topics)
@@ -441,8 +434,7 @@ def build_planning_graph(checkpointer=None):
     g.add_edge("strategist_plan", "plan_checks")
     g.add_conditional_edges("plan_checks", route_after_checks, ["strategist_fix", "save_draft"])
     g.add_edge("strategist_fix", "plan_checks")
-    g.add_conditional_edges("save_draft", route_after_save, ["approve_all", "notify_plan"])
-    g.add_edge("notify_plan", "await_plan")
+    g.add_conditional_edges("save_draft", route_after_save, ["approve_all", "await_plan"])
     g.add_conditional_edges("await_plan", route_after_plan_decision, ["collect_context", "approve_all"])
     g.add_edge("approve_all", END)
     g.add_edge("suggest_topics", END)

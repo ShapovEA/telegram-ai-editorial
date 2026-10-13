@@ -11,7 +11,7 @@ from app.api.utils import kick
 from app.db.models import Channel, LlmCall, Post, PostEdit, Run, Slot, User
 from app.db.session import get_session
 from app.domain.enums import AWAITING_DECISION, PostStatus, RunStatus, SlotStatus
-from app.domain.schemas import ChannelOptions, Styleguide
+from app.domain.schemas import ChannelOptions, Styleguide, channel_schedule
 from app.graphs.post import render
 from app.quality.checks import safe_html
 from app.quality.detector import detect
@@ -73,7 +73,7 @@ async def get_post(post_id: int, user: User = Depends(current_user), session: As
         "run_status": run.status if run else None,
         "revisions_left": revisions_left,
         "quality": {"issues": stamps, "critical": sum(1 for i in stamps if i["critical"])},
-        "channel": {"id": ch.id, "title": ch.title, "type": ch.type, "publish_mode": ch.publish_mode},
+        "channel": {"id": ch.id, "title": ch.title, "type": ch.type, "publish_mode": ch.publish_mode, "timezone": channel_schedule(ch.type, ch.schedule).timezone},
     }
 
 

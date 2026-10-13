@@ -13,23 +13,26 @@ from app.api.utils import kick, run_inline
 from app.db.models import Channel, ChannelDocVersion, ChannelPromptVersion, LlmCall, Post, Run, User
 from app.db.session import get_session
 from app.domain.enums import AWAITING_DECISION, ChannelStatus, ChannelType, PostStatus, RunKind, RunStatus
-from app.domain.schemas import BRIEF_TEXT_FIELDS, Brief, ChannelOptions, NewsSchedule, RoleModel, SmmSchedule, Strategy, Styleguide
+from app.domain.schemas import BRIEF_TEXT_FIELDS, Brief, ChannelOptions, RoleModel, Strategy, Styleguide, channel_schedule
 from app.graphs.runner import create_run
 from app.llm.agent import ask
 from app.prompts import registry
 from app.runtime.context import RunContext, reset_run, set_run
 from app.services import telegram
+from app.services.schedule import move_to_timezone
 
 router = APIRouter(prefix="/channels", tags=["channels"])
 
 
-class ChannelCreate(BaseModel):
+class TelegramChannel(BaseModel):
+    username: str = Field(min_length=1, max_length=200)
+
+
+class ChannelCreate(TelegramChannel):
     type: Literal["news", "smm"]
-    title: str = Field(min_length=1, max_length=200)
 
 
 class ChannelPatch(BaseModel):
-    title: str | None = None
     brief: Brief | None = None
     styleguide: Styleguide | None = None
     strategy: Strategy | None = None
@@ -55,10 +58,45 @@ async def list_channels(user: User = Depends(current_user), session: AsyncSessio
     return out
 
 
+async def verified_chat(username: str, user: User, session: AsyncSession, *, channel_id: int | None = None) -> dict:
+    username = username.strip().replace("https://t.me/", "").lstrip("@")
+    if not user.telegram_user_id:
+        raise HTTPException(400, "Сначала привяжите свой Telegram-аккаунт к кабинету")
+    try:
+        chat = await telegram.get_chat(f"@{username}")
+        admins = await telegram.get_admins(chat["id"])
+        me = await telegram.get_me()
+    except telegram.TelegramError as exc:
+        raise HTTPException(400, f"Не удалось проверить канал: {exc}. Добавьте бота администратором канала.") from exc
+    bot_admin = next((a for a in admins if a["user"]["id"] == me["id"]), None)
+    if bot_admin is None or not bot_admin.get("can_post_messages", bot_admin.get("status") == "creator"):
+        raise HTTPException(400, "Бот не администратор канала или не может публиковать сообщения")
+    if not any(a["user"]["id"] == user.telegram_user_id for a in admins):
+        raise HTTPException(403, "Ваш Telegram-аккаунт не администратор этого канала")
+    taken = (await session.execute(select(Channel).where(Channel.telegram_chat_id == chat["id"], Channel.id != channel_id))).scalar_one_or_none()
+    if taken:
+        raise HTTPException(409, "Этот Telegram-канал уже подключён в сервисе")
+    return {"id": chat["id"], "username": chat.get("username") or username, "title": chat["title"]}
+
+
 @router.post("")
 async def create_channel(body: ChannelCreate, user: User = Depends(current_user), session: AsyncSession = Depends(get_session)) -> dict:
-    schedule = NewsSchedule() if body.type == ChannelType.news else SmmSchedule()
-    ch = Channel(owner_id=user.id, type=body.type, title=body.title, status=ChannelStatus.draft, schedule=schedule.model_dump(), options=ChannelOptions().model_dump(), brief={}, styleguide={}, strategy={}, models={})
+    chat = await verified_chat(body.username, user, session)
+    schedule = channel_schedule(body.type, None)
+    ch = Channel(
+        owner_id=user.id,
+        type=body.type,
+        title=chat["title"],
+        telegram_chat_id=chat["id"],
+        telegram_username=chat["username"],
+        status=ChannelStatus.draft,
+        schedule=schedule.model_dump(),
+        options=ChannelOptions().model_dump(),
+        brief={},
+        styleguide={},
+        strategy={},
+        models={},
+    )
     session.add(ch)
     await session.commit()
     return channel_out(ch)
@@ -73,8 +111,6 @@ async def get_channel(channel_id: int, user: User = Depends(current_user), sessi
 async def patch_channel(channel_id: int, body: ChannelPatch, user: User = Depends(current_user), session: AsyncSession = Depends(get_session)) -> dict:
     ch = await owned_channel(channel_id, user, session)
     data = body.model_dump(exclude_unset=True)
-    if "title" in data:
-        ch.title = data["title"]
     if body.brief is not None:
         ch.brief = body.brief.model_dump()
         session.add(ChannelDocVersion(channel_id=ch.id, kind="brief", data=ch.brief))
@@ -88,8 +124,10 @@ async def patch_channel(channel_id: int, body: ChannelPatch, user: User = Depend
         ch.strategy = body.strategy.model_dump()
         session.add(ChannelDocVersion(channel_id=ch.id, kind="strategy", data=ch.strategy, note="правка владельца"))
     if body.schedule is not None:
-        model = NewsSchedule if ch.type == ChannelType.news else SmmSchedule
-        ch.schedule = model.model_validate(body.schedule).model_dump()
+        old, new = channel_schedule(ch.type, ch.schedule), channel_schedule(ch.type, body.schedule)
+        if new.timezone != old.timezone:
+            await move_to_timezone(session, ch.id, old.timezone, new.timezone)
+        ch.schedule = new.model_dump()
     if body.options is not None:
         ch.options = {**(ch.options or {}), **body.options.model_dump()}
     if body.publish_mode is not None:
@@ -114,41 +152,21 @@ async def delete_channel(channel_id: int, user: User = Depends(current_user), se
     return {"ok": True}
 
 
-class TelegramConnect(BaseModel):
-    username: str
-
-
 @router.post("/{channel_id}/telegram")
-async def connect_telegram(channel_id: int, body: TelegramConnect, user: User = Depends(current_user), session: AsyncSession = Depends(get_session)) -> dict:
+async def connect_telegram(channel_id: int, body: TelegramChannel, user: User = Depends(current_user), session: AsyncSession = Depends(get_session)) -> dict:
     ch = await owned_channel(channel_id, user, session)
-    username = body.username.strip().replace("https://t.me/", "").lstrip("@")
-    if not user.telegram_user_id:
-        raise HTTPException(400, "Сначала привяжите свой Telegram-аккаунт к кабинету")
-    try:
-        chat = await telegram.get_chat(f"@{username}")
-        admins = await telegram.get_admins(chat["id"])
-        me = await telegram.get_me()
-    except telegram.TelegramError as exc:
-        raise HTTPException(400, f"Не удалось проверить канал: {exc}. Добавьте бота администратором канала.") from exc
-    bot_admin = next((a for a in admins if a["user"]["id"] == me["id"]), None)
-    if bot_admin is None or not bot_admin.get("can_post_messages", bot_admin.get("status") == "creator"):
-        raise HTTPException(400, "Бот не администратор канала или не может публиковать сообщения")
-    if not any(a["user"]["id"] == user.telegram_user_id for a in admins):
-        raise HTTPException(403, "Ваш Telegram-аккаунт не администратор этого канала")
-    taken = (await session.execute(select(Channel).where(Channel.telegram_chat_id == chat["id"], Channel.id != ch.id))).scalar_one_or_none()
-    if taken:
-        raise HTTPException(409, "Этот Telegram-канал уже подключён в сервисе")
+    chat = await verified_chat(body.username, user, session, channel_id=ch.id)
     ch.telegram_chat_id = chat["id"]
-    ch.telegram_username = chat.get("username") or username
-    ch.telegram_title = chat.get("title")
+    ch.telegram_username = chat["username"]
+    ch.title = chat["title"]
     await session.commit()
     return channel_out(ch)
 
 
 @router.post("/{channel_id}/brief/check")
-async def brief_check(channel_id: int, user: User = Depends(current_user), session: AsyncSession = Depends(get_session)) -> dict:
+async def brief_check(channel_id: int, body: Brief, user: User = Depends(current_user), session: AsyncSession = Depends(get_session)) -> dict:
     ch = await owned_channel(channel_id, user, session)
-    run_id = await create_run(RunKind.brief_check, ch.id, title="Проверка брифа", input={"channel_id": ch.id})
+    run_id = await create_run(RunKind.brief_check, ch.id, title="Проверка брифа", input={"channel_id": ch.id, "brief": body.model_dump()})
     run = await run_inline(run_id)
     if run.status != RunStatus.done:
         raise HTTPException(502, run.error or "Проверка не удалась")
@@ -174,7 +192,7 @@ async def brief_assist(channel_id: int, body: AssistIn, user: User = Depends(cur
         raise HTTPException(400, "В брифе этого канала нет такого поля")
     editable, _ = await registry.editable_text(session, ch.id, "account_manager", "assist")
     system = registry.compose(editable, "account_manager", "assist", ch.type, {"channel_title": ch.title})
-    token = set_run(RunContext(channel_id=ch.id, kind="assist", role_models=await role_models_for(ch)))
+    token = set_run(RunContext(channel_id=ch.id, channel_type=ch.type, kind="assist", role_models=await role_models_for(ch)))
     try:
         out = await ask("account_manager", system, f"Поле: {BRIEF_TEXT_FIELDS[body.field]}\nЧерновик владельца:\n<data>\n{body.draft}\n</data>", AssistOut, label="Помощь с брифом")
     finally:
@@ -185,6 +203,8 @@ async def brief_assist(channel_id: int, body: AssistIn, user: User = Depends(cur
 @router.post("/{channel_id}/onboarding")
 async def start_onboarding(channel_id: int, user: User = Depends(current_user), session: AsyncSession = Depends(get_session)) -> dict:
     ch = await owned_channel(channel_id, user, session)
+    if not ch.telegram_chat_id:
+        raise HTTPException(400, "Подключите Telegram-канал: отдел берёт из него название канала")
     missing = Brief.model_validate(ch.brief or {}).required_missing(ch.type)
     if missing:
         raise HTTPException(400, "Заполните обязательные поля брифа: " + ", ".join(missing))
@@ -194,7 +214,7 @@ async def start_onboarding(channel_id: int, user: User = Depends(current_user), 
         count = (await session.execute(select(func.count()).where(ChannelSource.channel_id == ch.id))).scalar_one()
         if not count:
             raise HTTPException(400, "Для новостного канала добавьте хотя бы одну RSS-ленту")
-    run_id = await create_run(RunKind.onboarding, ch.id, title="Стайлгайд и стратегия", input={"channel_id": ch.id})
+    run_id = await create_run(RunKind.onboarding, ch.id, title="Стайлгайд и стратегия" if ch.type == ChannelType.smm else "Стайлгайд", input={"channel_id": ch.id})
     ch.status = ChannelStatus.onboarding
     await session.commit()
     await kick(run_id)

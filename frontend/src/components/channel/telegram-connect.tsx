@@ -1,7 +1,7 @@
-import { useGetIdentity } from "@refinedev/core"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { useGetIdentity, useInvalidate } from "@refinedev/core"
+import { useMutation } from "@tanstack/react-query"
 import { AlertTriangle, CheckCircle2, ExternalLink, Send } from "lucide-react"
-import { useEffect, useState, type FormEvent } from "react"
+import { useEffect, useState, type FormEvent, type ReactNode } from "react"
 import { toast } from "sonner"
 
 import { Callout, Spinner } from "@/components/common"
@@ -25,12 +25,25 @@ function StepTitle({ n, done, children }: { n: number; done: boolean; children: 
   )
 }
 
-export function TelegramConnect({ channel, onConnected }: { channel: Channel; onConnected?: (c: Channel) => void }) {
-  const client = useQueryClient()
+export function TelegramConnect({
+  defaultUsername = "",
+  connected = false,
+  submitLabel,
+  pending,
+  onSubmit,
+  children,
+}: {
+  defaultUsername?: string
+  connected?: boolean
+  submitLabel: string
+  pending: boolean
+  onSubmit: (username: string) => void
+  children?: ReactNode
+}) {
   const { data: settings } = useServiceSettings()
   const { data: user, refetch: refetchUser } = useGetIdentity<User>()
   const [waitingLink, setWaitingLink] = useState(false)
-  const [username, setUsername] = useState(channel.telegram_username ?? "")
+  const [username, setUsername] = useState(defaultUsername)
   const bot = settings?.telegram_bot_username?.replace(/^@/, "")
 
   useEffect(() => {
@@ -54,16 +67,6 @@ export function TelegramConnect({ channel, onConnected }: { channel: Channel; on
     onError: (e) => toast.error((e as Error).message),
   })
 
-  const connect = useMutation({
-    mutationFn: () => api<Channel>(`/channels/${channel.id}/telegram`, { body: { username } }),
-    onSuccess: (c) => {
-      toast.success(`Канал «${c.telegram_title ?? c.telegram_username}» подключён`)
-      client.invalidateQueries()
-      onConnected?.(c)
-    },
-    onError: (e) => toast.error((e as Error).message),
-  })
-
   if (settings && !settings.telegram_configured)
     return (
       <Callout tone="red" icon={<AlertTriangle />} title={<>Бот сервиса не настроен</>}>
@@ -73,7 +76,7 @@ export function TelegramConnect({ channel, onConnected }: { channel: Channel; on
 
   const submit = (e: FormEvent) => {
     e.preventDefault()
-    connect.mutate()
+    onSubmit(username)
   }
 
   return (
@@ -82,7 +85,7 @@ export function TelegramConnect({ channel, onConnected }: { channel: Channel; on
         <StepTitle n={1} done={!!user?.telegram_linked}>
           Привяжите свой Telegram
         </StepTitle>
-        <p className="pl-7 text-sm text-muted-foreground">Так сервис убедится, что вы администратор канала, и сможет присылать вам посты на согласование.</p>
+        <p className="pl-7 text-sm text-muted-foreground">Так сервис убедится, что вы администратор канала.</p>
         <div className="pl-7">
           {user?.telegram_linked ? (
             <p className="text-sm">Привязан{user.telegram_username ? ` как @${user.telegram_username}` : ""}</p>
@@ -96,7 +99,7 @@ export function TelegramConnect({ channel, onConnected }: { channel: Channel; on
       </div>
 
       <div className="space-y-2">
-        <StepTitle n={2} done={channel.telegram_connected}>
+        <StepTitle n={2} done={connected}>
           Добавьте бота администратором канала
         </StepTitle>
         <p className="pl-7 text-sm text-muted-foreground">
@@ -118,9 +121,10 @@ export function TelegramConnect({ channel, onConnected }: { channel: Channel; on
       </div>
 
       <form onSubmit={submit} className="space-y-2">
-        <StepTitle n={3} done={channel.telegram_connected}>
+        <StepTitle n={3} done={connected}>
           Укажите канал
         </StepTitle>
+        <p className="pl-7 text-sm text-muted-foreground">Название канала сервис возьмёт из Telegram.</p>
         <div className="flex flex-wrap items-end gap-2 pl-7">
           <div className="grid min-w-60 flex-1 gap-1.5">
             <Label htmlFor="tg-username" className="sr-only">
@@ -134,16 +138,41 @@ export function TelegramConnect({ channel, onConnected }: { channel: Channel; on
               required
             />
           </div>
-          <Button type="submit" disabled={!user?.telegram_linked || !username.trim() || connect.isPending}>
-            {connect.isPending && <Spinner />} {channel.telegram_connected ? "Переподключить" : "Подключить"}
+          <Button type="submit" disabled={!user?.telegram_linked || !username.trim() || pending}>
+            {pending && <Spinner />} {submitLabel}
           </Button>
         </div>
-        {channel.telegram_connected && (
-          <p className="pl-7 text-sm text-emerald-700 dark:text-emerald-400">
-            Подключён: {channel.telegram_title} (@{channel.telegram_username})
-          </p>
-        )}
+        {children}
       </form>
     </div>
+  )
+}
+
+export function ChannelTelegram({ channel, onConnected }: { channel: Channel; onConnected: () => void }) {
+  const invalidate = useInvalidate()
+  const connect = useMutation({
+    mutationFn: (username: string) => api<Channel>(`/channels/${channel.id}/telegram`, { body: { username } }),
+    onSuccess: (c) => {
+      toast.success(`Канал «${c.title}» подключён`)
+      invalidate({ resource: "channels", invalidates: ["list"] })
+      onConnected()
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+
+  return (
+    <TelegramConnect
+      defaultUsername={channel.telegram_username ?? ""}
+      connected={channel.telegram_connected}
+      submitLabel={channel.telegram_connected ? "Переподключить" : "Подключить"}
+      pending={connect.isPending}
+      onSubmit={(username) => connect.mutate(username)}
+    >
+      {channel.telegram_connected && (
+        <p className="pl-7 text-sm text-emerald-700 dark:text-emerald-400">
+          Подключён: {channel.title} (@{channel.telegram_username})
+        </p>
+      )}
+    </TelegramConnect>
   )
 }

@@ -81,7 +81,6 @@ class Channel(TimestampMixin, Base):
     publish_mode: Mapped[str] = mapped_column(String(16), default=PublishMode.approval)
     telegram_chat_id: Mapped[int | None] = mapped_column(BigInteger)
     telegram_username: Mapped[str | None] = mapped_column(String(64))
-    telegram_title: Mapped[str | None] = mapped_column(String(255))
     brief: Mapped[dict[str, Any]] = mapped_column(default=dict)
     styleguide: Mapped[dict[str, Any]] = mapped_column(default=dict)
     strategy: Mapped[dict[str, Any]] = mapped_column(default=dict)

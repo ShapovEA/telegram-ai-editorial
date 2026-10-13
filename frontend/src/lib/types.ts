@@ -45,9 +45,6 @@ export type StyleStructured = {
   length_min: number
   length_max: number
   emoji_max: number
-  allow_bold: boolean
-  allow_quotes: boolean
-  allow_lists: boolean
   banned_phrases: string[]
   signature: string
   hashtags: string[]
@@ -109,7 +106,6 @@ export type Channel = {
   status: ChannelStatus
   publish_mode: PublishMode
   telegram_username: string | null
-  telegram_title: string | null
   telegram_connected: boolean
   brief: Brief
   styleguide: Styleguide

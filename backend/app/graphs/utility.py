@@ -32,6 +32,7 @@ class BriefCheck(BaseModel):
 class UtilityState(TypedDict, total=False):
     run_id: str
     channel_id: int
+    brief: dict[str, Any]
     role: str
     key: str
     text: str
@@ -56,7 +57,7 @@ def brief_text(brief: Brief, channel_type: str) -> str:
 @node("brief_check", "Аккаунт-менеджер проверяет бриф")
 async def brief_check(state: UtilityState) -> dict:
     ctx = await build_ctx(state["channel_id"])
-    brief = Brief.model_validate(ctx["brief"])
+    brief = Brief.model_validate(state["brief"])
     missing = brief.required_missing(ctx["type"])
     system = await system_prompt(ctx, "account_manager", "brief_check")
     answer = await ask("account_manager", system, block("БРИФ", brief_text(brief, ctx["type"])), BriefCheck, label="Проверка брифа")

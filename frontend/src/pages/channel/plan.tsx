@@ -35,7 +35,7 @@ import { api } from "@/lib/api"
 import { fmtDateTime } from "@/lib/format"
 import { formatLabel, slotStatusLabel, weekdayShort } from "@/lib/labels"
 import type { Channel, Plan, Run, Slot } from "@/lib/types"
-import { addDaysKey, mondayKey, zonedDayKey, zonedTime, zonedToUtc } from "@/lib/tz"
+import { addDaysKey, mondayKey, zonedDateTime, zonedDayKey, zonedTime, zonedToUtc } from "@/lib/tz"
 import { cn } from "@/lib/utils"
 import { useChannel } from "@/pages/channel/layout"
 
@@ -394,7 +394,7 @@ export function ChannelPlan() {
       )}
       {waiting && (
         <Callout tone="yellow" icon={<AlertTriangle />} title={<>План ждёт утверждения</>} className="mb-4">
-          {plan?.auto_approve_at ? `Если не ответить, план утвердится сам ${fmtDateTime(plan.auto_approve_at)}. ` : ""}Перетаскивайте слоты между днями, меняйте
+          {plan?.auto_approve_at ? `Если не ответить, план утвердится сам ${zonedDateTime(plan.auto_approve_at, tz)}. ` : ""}Перетаскивайте слоты между днями, меняйте
           темы, затем утвердите.
         </Callout>
       )}

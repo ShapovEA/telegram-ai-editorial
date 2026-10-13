@@ -5,9 +5,10 @@ import { Link } from "react-router"
 import { EmptyState, ErrorState, LoadingRows, StatusBadge, ToneBadge } from "@/components/common"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { fmtDateTime, fmtUsd } from "@/lib/format"
+import { fmtUsd } from "@/lib/format"
 import { formatLabel, postStatusLabel } from "@/lib/labels"
 import type { Post } from "@/lib/types"
+import { zonedDateTime } from "@/lib/tz"
 import { useChannel } from "@/pages/channel/layout"
 
 const FILTERS: { value: string; label: string }[] = [
@@ -59,7 +60,7 @@ export function ChannelPosts() {
           {result.data.map((p) => (
             <li key={p.id}>
               <Link to={`/posts/${p.id}`} className="flex flex-wrap items-start gap-3 p-3 hover:bg-muted/40 sm:flex-nowrap">
-                <div className="w-28 shrink-0 text-xs text-muted-foreground tabular-nums">{fmtDateTime(p.published_at ?? p.publish_at ?? p.created_at)}</div>
+                <div className="w-28 shrink-0 text-xs text-muted-foreground tabular-nums">{zonedDateTime(p.published_at ?? p.publish_at ?? p.created_at, channel.schedule.timezone)}</div>
                 <div className="min-w-0 flex-1">
                   <div className="truncate font-medium">{p.title || "Без заголовка"}</div>
                   <p className="line-clamp-2 text-sm text-muted-foreground">{p.text}</p>

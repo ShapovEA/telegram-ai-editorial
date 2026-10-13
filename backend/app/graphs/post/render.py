@@ -54,15 +54,6 @@ def compose_html(title: str, body_html: str, sg: Styleguide, source_url: str | N
     return head + body_html.strip() + (f"\n\n{tail}" if tail else "")
 
 
-def approval_preview(formatted: dict) -> str:
-    parts = [formatted.get("html", "")]
-    poll = formatted.get("poll")
-    if poll:
-        options = "\n".join(f"— {html.escape(o)}" for o in poll.get("options") or [])
-        parts.append(f"<b>Опрос:</b> {html.escape(poll.get('question', ''))}\n{options}")
-    return "\n\n".join(p for p in parts if p.strip())
-
-
 def format_non_text(d: dict, fmt: str, sg: Styleguide) -> dict:
     if fmt == "poll":
         intro = safe_html(d.get("intro", "")) if d.get("intro") else ""

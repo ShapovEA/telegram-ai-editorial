@@ -21,6 +21,7 @@ const KEY_LABELS: Record<string, string> = {
   rubric: "Рубрика",
   slots: "Слоты",
   publish_at: "Время публикации",
+  local_at: "Время по поясу канала",
   outcome: "Итог",
   outcome_reason: "Причина",
   claim: "Утверждение",

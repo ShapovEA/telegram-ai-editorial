@@ -26,7 +26,6 @@ async def load_slot(state: PostState) -> dict:
         "unconfirmed_claims": [],
         "related_post": None,
         "channel_position": position,
-        "publish_at": slot["publish_at"],
         "note": f"Комментарий владельца к теме: {slot['comment']}" if slot.get("comment") else "",
     }
     await output("brief", brief)

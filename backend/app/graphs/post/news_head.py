@@ -366,7 +366,6 @@ async def build_news_brief(state: PostState) -> dict:
         "unconfirmed_claims": [c["claim"] for c in fc["claims"] if c["status"] != "confirmed"],
         "related_post": related,
         "channel_position": None,
-        "publish_at": state["slot"]["publish_at"],
     }
     async with session_scope() as s:
         await s.execute(update(ChannelStory).where(ChannelStory.channel_id == ctx["channel_id"], ChannelStory.story_id == chosen["story_id"]).values(status=StoryStatus.in_work))
@@ -419,7 +418,6 @@ async def evergreen(state: PostState) -> dict:
             "unconfirmed_claims": [],
             "related_post": None,
             "channel_position": None,
-            "publish_at": state["slot"]["publish_at"],
             "evergreen": True,
             "idea_id": idea.id,
         }

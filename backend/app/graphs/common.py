@@ -40,30 +40,38 @@ async def _check_cancel() -> None:
         return
 
 
-NODE_LABELS: dict[str, str] = {}
+NODE_LABELS: dict[str, dict[str | None, str]] = {}
 
 
-def node(name: str, label: str):
-    NODE_LABELS[name] = label
+def node_label(name: str, channel_type: str | None) -> str:
+    labels = NODE_LABELS.get(name, {})
+    return labels.get(channel_type) or labels.get(None, name)
+
+
+def node(name: str, label: str, **by_type: str):
+    if name in NODE_LABELS:
+        raise ValueError(f"Узел {name} уже объявлен")
+    NODE_LABELS[name] = {None: label, **by_type}
 
     def deco(fn: Callable[[dict], Awaitable[dict]]):
         @functools.wraps(fn)
         async def wrapper(state: dict) -> dict:
             await _check_cancel()
             token = set_node(name)
+            text = node_label(name, current_run().channel_type)
             started = time.monotonic()
             try:
-                await set_run_progress(name, label)
-                await emit("node_start", {"label": label})
+                await set_run_progress(name, text)
+                await emit("node_start", {"label": text})
                 with tracing.observe(name, as_type="chain"):
                     update = await fn(state)
-                await emit("node_end", {"label": label, "duration_ms": int((time.monotonic() - started) * 1000)})
+                await emit("node_end", {"label": text, "duration_ms": int((time.monotonic() - started) * 1000)})
                 return update or {}
             except GraphInterrupt:
-                await emit("node_wait", {"label": label})
+                await emit("node_wait", {"label": text})
                 raise
             except Exception as exc:
-                await emit("node_error", {"label": label, "error": f"{type(exc).__name__}: {exc}"[:1000]})
+                await emit("node_error", {"label": text, "error": f"{type(exc).__name__}: {exc}"[:1000]})
                 raise
             finally:
                 reset_node(token)

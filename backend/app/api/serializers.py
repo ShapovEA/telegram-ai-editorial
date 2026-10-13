@@ -1,7 +1,7 @@
 from typing import Any
 
 from app.db.models import AnalyticsReport, Channel, ChannelStory, Idea, Plan, Post, Run, RunEvent, Slot, Source, Story, User
-from app.domain.schemas import Brief, ChannelOptions, NewsSchedule, SmmSchedule, Strategy, Styleguide
+from app.domain.schemas import Brief, ChannelOptions, Strategy, Styleguide, channel_schedule
 
 
 def iso(dt) -> str | None:
@@ -13,7 +13,6 @@ def user_out(u: User) -> dict[str, Any]:
 
 
 def channel_out(ch: Channel) -> dict[str, Any]:
-    schedule_model = NewsSchedule if ch.type == "news" else SmmSchedule
     return {
         "id": ch.id,
         "type": ch.type,
@@ -21,12 +20,11 @@ def channel_out(ch: Channel) -> dict[str, Any]:
         "status": ch.status,
         "publish_mode": ch.publish_mode,
         "telegram_username": ch.telegram_username,
-        "telegram_title": ch.telegram_title,
         "telegram_connected": bool(ch.telegram_chat_id),
         "brief": Brief.model_validate(ch.brief or {}).model_dump(),
         "styleguide": Styleguide.model_validate(ch.styleguide or {}).model_dump(),
         "strategy": Strategy.model_validate(ch.strategy).model_dump() if ch.strategy else None,
-        "schedule": schedule_model.model_validate(ch.schedule or {}).model_dump(),
+        "schedule": channel_schedule(ch.type, ch.schedule).model_dump(),
         "options": ChannelOptions.model_validate(ch.options or {}).model_dump(),
         "models": ch.models or {},
         "budget_month_usd": float(ch.budget_month_usd) if ch.budget_month_usd is not None else None,

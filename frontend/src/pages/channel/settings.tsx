@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Trash2 } from "lucide-react"
+import { Clock, Trash2 } from "lucide-react"
 import { useState, type ReactNode } from "react"
 import { useNavigate, useSearchParams } from "react-router"
 import { toast } from "sonner"
@@ -10,8 +10,8 @@ import { PromptsEditor } from "@/components/channel/prompts-editor"
 import { ScheduleEditor } from "@/components/channel/schedule-editor"
 import { StrategyEditor, emptyStrategy, rubricShareTotal } from "@/components/channel/strategy-editor"
 import { StyleguideEditor } from "@/components/channel/styleguide-editor"
-import { TelegramConnect } from "@/components/channel/telegram-connect"
-import { LoadingRows, Spinner, ToneBadge } from "@/components/common"
+import { ChannelTelegram } from "@/components/channel/telegram-connect"
+import { Callout, LoadingRows, Spinner, ToneBadge } from "@/components/common"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -72,25 +72,18 @@ function NumberOption({ label, hint, value, onChange, suffix }: { label: string;
 }
 
 function GeneralSection({ channel, refetch }: { channel: Channel; refetch: () => void }) {
-  const [title, setTitle] = useState(channel.title)
   const [mode, setMode] = useState(channel.publish_mode)
   const [budget, setBudget] = useState(channel.budget_month_usd?.toString() ?? "")
   const [opts, setOpts] = useState<ChannelOptions>(channel.options)
   const patch = usePatch(channel, refetch)
   const set = <K extends keyof ChannelOptions>(k: K, v: ChannelOptions[K]) => setOpts((o) => ({ ...o, [k]: v }))
-  const dirty =
-    title !== channel.title || mode !== channel.publish_mode || budget !== (channel.budget_month_usd?.toString() ?? "") || JSON.stringify(opts) !== JSON.stringify(channel.options)
-  const canToggle = channel.status === "active" || channel.status === "paused"
+  const dirty = mode !== channel.publish_mode || budget !== (channel.budget_month_usd?.toString() ?? "") || JSON.stringify(opts) !== JSON.stringify(channel.options)
   const news = channel.type === "news"
 
   return (
     <div className="space-y-6">
       <Card>
         <CardContent className="grid gap-5 sm:grid-cols-2">
-          <div className="grid gap-1.5">
-            <Label htmlFor="ch-title">Название в сервисе</Label>
-            <Input id="ch-title" value={title} onChange={(e) => setTitle(e.target.value)} />
-          </div>
           <div className="grid gap-1.5">
             <Label htmlFor="ch-budget">Бюджет на месяц, $</Label>
             <Input id="ch-budget" type="number" min={0} step={1} value={budget} onChange={(e) => setBudget(e.target.value)} placeholder="Без лимита" />
@@ -101,7 +94,7 @@ function GeneralSection({ channel, refetch }: { channel: Channel; refetch: () =>
             <div className="grid gap-2 sm:grid-cols-2">
               {(
                 [
-                  ["approval", "С согласованием", "Каждый пост приходит вам в Telegram и в кабинет. Без ответа к сроку пост не выходит."],
+                  ["approval", "С согласованием", "Каждый пост ждёт вашего решения в кабинете. Без ответа к сроку пост не выходит."],
                   ["autopilot", "Автопилот", "Посты выходят сами после проверок редактора. Вы можете отклонить пост до публикации."],
                 ] as const
               ).map(([v, l, d]) => (
@@ -148,7 +141,7 @@ function GeneralSection({ channel, refetch }: { channel: Channel; refetch: () =>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="evergreen">Вечнозелёная тема</SelectItem>
+                <SelectItem value="evergreen">Общая тема</SelectItem>
                 <SelectItem value="skip">Пропустить</SelectItem>
               </SelectContent>
             </Select>
@@ -163,24 +156,9 @@ function GeneralSection({ channel, refetch }: { channel: Channel; refetch: () =>
       <SaveBar
         dirty={dirty}
         pending={patch.isPending}
-        onSave={() => patch.mutate({ title, publish_mode: mode, budget_month_usd: budget ? Number(budget) : null, options: opts })}
+        onSave={() => patch.mutate({ publish_mode: mode, budget_month_usd: budget ? Number(budget) : null, options: opts })}
       />
 
-      {canToggle && (
-        <Card>
-          <CardContent className="flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <div className="font-medium">{channel.status === "paused" ? "Канал на паузе" : "Канал работает"}</div>
-              <p className="text-sm text-muted-foreground">На паузе отдел не создаёт и не публикует посты. Запланированное остаётся.</p>
-            </div>
-            <Switch
-              checked={channel.status === "active"}
-              onCheckedChange={(v) => patch.mutate({ status: v ? "active" : "paused" })}
-              aria-label="Канал работает"
-            />
-          </CardContent>
-        </Card>
-      )}
       <DangerZone channel={channel} />
     </div>
   )
@@ -266,6 +244,12 @@ function ScheduleSection({ channel, refetch }: { channel: Channel; refetch: () =
     <Card>
       <CardContent>
         <ScheduleEditor type={channel.type} value={value} onChange={setValue} />
+        {value.timezone !== channel.schedule.timezone && (
+          <Callout tone="yellow" icon={<Clock />} title={<>Посты сохранят местное время выхода</>} className="mt-5">
+            Пост на 19:00 выйдет в 19:00 по новому поясу. Если в новом поясе это время уже прошло, готовый пост выйдет сразу, а неодобренный или ещё не начатый
+            пропустится.
+          </Callout>
+        )}
         <SaveBar dirty={JSON.stringify(value) !== JSON.stringify(channel.schedule)} pending={patch.isPending} onSave={() => patch.mutate({ schedule: value })} />
       </CardContent>
     </Card>
@@ -356,7 +340,7 @@ export function ChannelSettings() {
     { id: "brief", label: "Бриф", show: true },
     { id: "styleguide", label: "Стайлгайд", show: channel.status !== "draft" },
     { id: "strategy", label: "Стратегия", show: channel.type === "smm" && channel.status !== "draft" },
-    { id: "schedule", label: "Ритм", show: true },
+    { id: "schedule", label: "Расписание", show: true },
     { id: "telegram", label: "Telegram", show: true },
     { id: "models", label: "Модели", show: true },
     { id: "prompts", label: "Промпты", show: true },
@@ -380,10 +364,10 @@ export function ChannelSettings() {
       <Card key={key}>
         <CardHeader>
           <CardTitle>Подключение к Telegram</CardTitle>
-          <CardDescription>Бот сервиса публикует посты и присылает вам посты на согласование</CardDescription>
+          <CardDescription>Бот сервиса публикует посты в канал. Название канала берётся из Telegram</CardDescription>
         </CardHeader>
         <CardContent>
-          <TelegramConnect channel={channel} onConnected={refetch} />
+          <ChannelTelegram channel={channel} onConnected={refetch} />
         </CardContent>
       </Card>
     ),

@@ -21,19 +21,21 @@ import {
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
-import { useRunStream } from "@/hooks/use-run-stream"
+import { type RunDetail, useRunStream } from "@/hooks/use-run-stream"
 import { api } from "@/lib/api"
 import { fmtDateTime, fmtDuration, fmtNumber, fmtUsd } from "@/lib/format"
 import { runKindLabel, runStatusLabel } from "@/lib/labels"
-import type { Run } from "@/lib/types"
 
-function WaitingNotice({ run }: { run: Run }) {
+function WaitingNotice({ run }: { run: RunDetail }) {
   const w = run.waiting_for
   if (!w) return null
   const links: Record<string, { text: string; to: string }> = {
     post_approval: { text: "Открыть пост", to: `/posts/${String(w.post_id)}` },
     plan_approval: { text: "Открыть контент-план", to: `/channels/${run.channel_id}/plan` },
-    onboarding_approval: { text: "Посмотреть стайлгайд и стратегию", to: `/channels/${run.channel_id}` },
+    onboarding_approval: {
+      text: run.channel_type === "smm" ? "Посмотреть стайлгайд и стратегию" : "Посмотреть стайлгайд",
+      to: `/channels/${run.channel_id}`,
+    },
     strategy_proposal: { text: "Открыть отчёт аналитика", to: `/channels/${run.channel_id}/analytics` },
   }
   const link = links[w.type]
@@ -175,7 +177,7 @@ export function RunPage() {
             <CardTitle>Схема</CardTitle>
           </CardHeader>
           <CardContent>
-            <GraphView kind={run.kind} events={events} finished={isFinal} succeeded={run.status === "done"} />
+            <GraphView runId={run.id} events={events} finished={isFinal} succeeded={run.status === "done"} />
             <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
               <span className="flex items-center gap-1.5">
                 <span className="size-2.5 rounded-sm border border-sky-500 bg-sky-500/20" /> сейчас

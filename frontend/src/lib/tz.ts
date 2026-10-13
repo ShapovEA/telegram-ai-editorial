@@ -1,3 +1,6 @@
+import type { Month } from "date-fns"
+import { ru } from "date-fns/locale"
+
 function parts(date: Date, timeZone: string) {
   const fmt = new Intl.DateTimeFormat("en-CA", {
     timeZone,
@@ -28,6 +31,14 @@ export function zonedDayKey(iso: string | Date, timeZone: string): string {
 export function zonedTime(iso: string | Date, timeZone: string): string {
   const p = parts(typeof iso === "string" ? new Date(iso) : iso, timeZone)
   return `${String(p.hour).padStart(2, "0")}:${String(p.minute).padStart(2, "0")}`
+}
+
+export function zonedDateTime(iso: string | Date, timeZone: string): string {
+  const date = typeof iso === "string" ? new Date(iso) : iso
+  const p = parts(date, timeZone)
+  const month = ru.localize.month((p.month - 1) as Month, { width: "abbreviated", context: "formatting" })
+  const year = p.year === parts(new Date(), timeZone).year ? "" : ` ${p.year}`
+  return `${p.day} ${month}${year}, ${zonedTime(date, timeZone)}`
 }
 
 export function zonedToUtc(dayKey: string, time: string, timeZone: string): Date {

@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import type { StyleStructured, Styleguide } from "@/lib/types"
 
@@ -41,21 +40,6 @@ export function StyleguideEditor({ value, onChange }: { value: Styleguide; onCha
         <NumberField id="sg-min" label="Длина от, символов" value={s.length_min} onChange={(v) => setS("length_min", v)} />
         <NumberField id="sg-max" label="Длина до, символов" value={s.length_max} onChange={(v) => setS("length_max", v)} />
         <NumberField id="sg-emoji" label="Эмодзи на пост, не больше" value={s.emoji_max} onChange={(v) => setS("emoji_max", v)} />
-      </div>
-
-      <div className="flex flex-wrap gap-x-6 gap-y-3">
-        {(
-          [
-            ["allow_bold", "Жирный шрифт"],
-            ["allow_quotes", "Цитаты"],
-            ["allow_lists", "Списки"],
-          ] as const
-        ).map(([key, label]) => (
-          <label key={key} className="flex items-center gap-2 text-sm">
-            <Switch checked={s[key]} onCheckedChange={(v) => setS(key, v)} />
-            {label}
-          </label>
-        ))}
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">

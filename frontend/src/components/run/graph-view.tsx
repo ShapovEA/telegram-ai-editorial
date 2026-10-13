@@ -87,11 +87,11 @@ export function nodeStates(events: RunEvent[]): Map<string, NodeState> {
   return states
 }
 
-export function GraphView({ kind, events, finished, succeeded }: { kind: string; events: RunEvent[]; finished: boolean; succeeded: boolean }) {
+export function GraphView({ runId, events, finished, succeeded }: { runId: string; events: RunEvent[]; finished: boolean; succeeded: boolean }) {
   const { resolvedTheme } = useTheme()
   const { data, isLoading } = useQuery({
-    queryKey: ["graph", kind],
-    queryFn: () => api<GraphData>(`/graphs/${kind}`),
+    queryKey: ["run-graph", runId],
+    queryFn: () => api<GraphData>(`/runs/${runId}/graph`),
     staleTime: Infinity,
   })
 

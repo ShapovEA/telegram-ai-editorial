@@ -2,9 +2,10 @@ import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect, useRef, useState } from "react"
 
 import { api, streamUrl } from "@/lib/api"
-import type { Run, RunEvent } from "@/lib/types"
+import type { ChannelType, Run, RunEvent } from "@/lib/types"
 
 export type RunDetail = Run & {
+  channel_type: ChannelType | null
   events: RunEvent[]
   llm: { calls: number; cost: number; prompt_tokens: number; completion_tokens: number; latency_ms: number }
 }

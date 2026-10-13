@@ -11,6 +11,7 @@ from app.domain.schemas import DEFAULT_ROLE_MODELS, RoleModel
 class RunContext:
     run_id: str | None = None
     channel_id: int | None = None
+    channel_type: str | None = None
     post_id: int | None = None
     kind: str = ""
     role_models: dict[str, RoleModel] = field(default_factory=dict)

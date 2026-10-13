@@ -197,21 +197,13 @@ export function BriefForm({ channel, onSaved }: { channel: Channel; onSaved?: (c
   })
 
   const check = useMutation({
-    mutationFn: async () => {
-      const saved = dirty
-      if (saved) {
-        const c = await api<Channel>(`/channels/${channel.id}`, { method: "PATCH", body: { brief } })
-        onSaved?.(c)
-      }
-      const res = await api<{ ok: boolean; questions: Question[] }>(`/channels/${channel.id}/brief/check`, { method: "POST" })
-      return { ...res, saved }
-    },
+    mutationFn: () => api<{ ok: boolean; questions: Question[] }>(`/channels/${channel.id}/brief/check`, { body: brief }),
     onSuccess: (res) => {
       const qs = res.ok ? [] : res.questions
       setQuestions(qs)
       const noFeeds = rssRequired && (sources?.length ?? 0) === 0
       if (qs.length === 0 && !noFeeds) {
-        toast.success("Бриф понятен, вопросов нет", { description: res.saved ? "Изменения сохранены" : undefined })
+        toast.success("Бриф понятен, вопросов нет")
         return
       }
       toast.warning(`Есть вопросы по брифу: ${qs.length + (noFeeds ? 1 : 0)}`, { description: "Они показаны под полями" })

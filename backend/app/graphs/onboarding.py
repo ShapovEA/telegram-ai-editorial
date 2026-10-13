@@ -67,10 +67,6 @@ async def designer_styleguide(state: OnboardingState) -> dict:
     return {"styleguide": sg.model_dump()}
 
 
-def route_after_styleguide(state: OnboardingState) -> str:
-    return "strategist_strategy" if state["ctx"]["type"] == ChannelType.smm else "await_approval"
-
-
 @node("strategist_strategy", "Стратег составляет стратегию")
 async def strategist_strategy(state: OnboardingState) -> dict:
     ctx = state["ctx"]
@@ -94,8 +90,8 @@ async def strategist_strategy(state: OnboardingState) -> dict:
     return {"strategy": strategy.model_dump()}
 
 
-@node("await_approval", "Ожидание утверждения стайлгайда и стратегии")
-async def await_approval(state: OnboardingState) -> dict:
+@node("await_documents", "Ожидание утверждения стайлгайда и стратегии", news="Ожидание утверждения стайлгайда")
+async def await_documents(state: OnboardingState) -> dict:
     decision = interrupt({"type": "onboarding_approval", "styleguide": state["styleguide"], "strategy": state.get("strategy")})
     return {"decision": decision if isinstance(decision, dict) else {"action": str(decision)}}
 
@@ -113,7 +109,7 @@ async def regenerate(state: OnboardingState) -> dict:
     return {"comment": d.get("comment", ""), "decision": None}
 
 
-@node("save_documents", "Сохранение стайлгайда и стратегии")
+@node("save_documents", "Сохранение стайлгайда и стратегии", news="Сохранение стайлгайда")
 async def save_documents(state: OnboardingState) -> dict:
     d = state.get("decision") or {}
     sg = Styleguide.model_validate(d.get("styleguide") or state["styleguide"])
@@ -157,20 +153,23 @@ async def seed_ideas(state: OnboardingState) -> dict:
     return {"result": {"activated_at": datetime.now(UTC).isoformat(), "ideas": len(topics)}}
 
 
-def build_onboarding_graph(checkpointer=None):
+def build_onboarding_graph(channel_type: str, checkpointer=None):
     g = StateGraph(OnboardingState)
     g.add_node("read_samples", read_samples)
     g.add_node("designer_styleguide", designer_styleguide)
-    g.add_node("strategist_strategy", strategist_strategy)
-    g.add_node("await_approval", await_approval)
+    g.add_node("await_documents", await_documents)
     g.add_node("regenerate", regenerate)
     g.add_node("save_documents", save_documents)
     g.add_node("seed_ideas", seed_ideas)
     g.add_edge(START, "read_samples")
     g.add_edge("read_samples", "designer_styleguide")
-    g.add_conditional_edges("designer_styleguide", route_after_styleguide, ["strategist_strategy", "await_approval"])
-    g.add_edge("strategist_strategy", "await_approval")
-    g.add_conditional_edges("await_approval", route_after_decision, ["regenerate", "save_documents"])
+    if channel_type == ChannelType.smm:
+        g.add_node("strategist_strategy", strategist_strategy)
+        g.add_edge("designer_styleguide", "strategist_strategy")
+        g.add_edge("strategist_strategy", "await_documents")
+    else:
+        g.add_edge("designer_styleguide", "await_documents")
+    g.add_conditional_edges("await_documents", route_after_decision, ["regenerate", "save_documents"])
     g.add_edge("regenerate", "designer_styleguide")
     g.add_edge("save_documents", "seed_ideas")
     g.add_edge("seed_ideas", END)

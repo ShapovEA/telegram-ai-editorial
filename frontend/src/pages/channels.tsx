@@ -46,7 +46,7 @@ export function ChannelsPage() {
         <EmptyState
           icon={<Tv />}
           title="Каналов пока нет"
-          description="Создайте канал: заполните бриф, подключите бота к Telegram-каналу, и отдел возьмётся за работу"
+          description="Создайте канал: подключите бота к Telegram-каналу, заполните бриф, и отдел возьмётся за работу"
           action={
             <Button asChild>
               <Link to="/channels/new">

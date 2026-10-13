@@ -14,7 +14,6 @@ from app.domain.schemas import Strategy
 from app.graphs.common import block, join_blocks, node, output, system_prompt
 from app.graphs.context import build_ctx
 from app.llm.agent import ask, run_agent
-from app.services import notify
 from app.tools import agent_tools
 
 
@@ -126,7 +125,6 @@ async def strategist_proposal(state: AnalyticsState) -> dict:
         rep_row = await s.get(AnalyticsReport, state["report_id"])
         rep_row.proposal = proposal.model_dump()
     await output("proposal", proposal.model_dump())
-    await notify.notify_owner(state["channel_id"], "Готов отчёт за месяц и предложения по стратегии.", buttons=notify.link_buttons(f"/channels/{state['channel_id']}/analytics"))
     return {"proposal": proposal.model_dump()}
 
 

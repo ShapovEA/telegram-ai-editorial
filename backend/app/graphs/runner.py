@@ -1,8 +1,8 @@
 import asyncio
-import html
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from typing import Any
 
 from langgraph.types import Command
@@ -19,7 +19,6 @@ from app.llm.client import BudgetExceeded, LLMUnavailable
 from app.observability import tracing
 from app.runtime.context import RunContext, reset_run, set_run
 from app.runtime.events import emit, notify_channel
-from app.services import notify
 from app.services.service_settings import get_service_config
 
 log = logging.getLogger(__name__)
@@ -28,7 +27,7 @@ DEFER_STEPS = [15, 30, 60, 120]
 MAX_DEFERS = 4
 
 
-def _builders() -> dict[str, Callable]:
+def _builders(channel_type: str | None) -> dict[str, Callable]:
     from app.graphs.analytics import build_analytics_graph
     from app.graphs.onboarding import build_onboarding_graph
     from app.graphs.planning import build_planning_graph
@@ -36,9 +35,9 @@ def _builders() -> dict[str, Callable]:
     from app.graphs.utility import build_brief_check_graph, build_prompt_test_graph, build_rules_graph
 
     return {
-        RunKind.post: build_post_graph,
+        RunKind.post: partial(build_post_graph, channel_type),
         RunKind.planning: build_planning_graph,
-        RunKind.onboarding: build_onboarding_graph,
+        RunKind.onboarding: partial(build_onboarding_graph, channel_type),
         RunKind.analytics: build_analytics_graph,
         RunKind.brief_check: build_brief_check_graph,
         RunKind.prompt_test: build_prompt_test_graph,
@@ -46,13 +45,14 @@ def _builders() -> dict[str, Callable]:
     }
 
 
-_compiled: dict[str, Any] = {}
+_compiled: dict[tuple[str, str | None], Any] = {}
 
 
-async def graph_for(kind: str):
-    if kind not in _compiled:
-        _compiled[kind] = _builders()[kind](await get_checkpointer())
-    return _compiled[kind]
+async def graph_for(kind: str, channel_type: str | None):
+    key = (kind, channel_type)
+    if key not in _compiled:
+        _compiled[key] = _builders(channel_type)[kind](await get_checkpointer())
+    return _compiled[key]
 
 
 async def create_run(kind: str, channel_id: int | None, *, title: str, input: dict[str, Any], slot_id: int | None = None, plan_id: int | None = None, post_id: int | None = None) -> str:
@@ -81,15 +81,17 @@ async def role_models_for(ch: Channel | None) -> dict[str, RoleModel]:
 async def _context_for(run: Run) -> RunContext:
     models: dict[str, RoleModel] = await role_models_for(None)
     budget = None
+    channel_type = None
     if run.channel_id:
         async with session_scope() as s:
             ch = await s.get(Channel, run.channel_id)
             if ch:
                 models = await role_models_for(ch)
                 budget = float(ch.budget_month_usd) if ch.budget_month_usd else None
+                channel_type = ch.type
     async with session_scope() as s:
         seq = (await s.execute(select(func.coalesce(func.max(RunEvent.seq), 0)).where(RunEvent.run_id == run.id))).scalar_one()
-    return RunContext(run_id=run.id, channel_id=run.channel_id, post_id=run.post_id, kind=run.kind, role_models=models, budget_usd=budget, seq=int(seq))
+    return RunContext(run_id=run.id, channel_id=run.channel_id, channel_type=channel_type, post_id=run.post_id, kind=run.kind, role_models=models, budget_usd=budget, seq=int(seq))
 
 
 async def _set(run_id: str, **values: Any) -> None:
@@ -97,7 +99,7 @@ async def _set(run_id: str, **values: Any) -> None:
         await s.execute(update(Run).where(Run.id == run_id).values(**values))
 
 
-async def _on_problem(run: Run, status: str, message: str, *, notify_owner: bool = True) -> None:
+async def _on_problem(run: Run, status: str, message: str) -> None:
     if run.kind == RunKind.post and run.slot_id:
         slot_status = {RunStatus.deferred: SlotStatus.deferred, RunStatus.cancelled: SlotStatus.skipped}.get(status, SlotStatus.failed)
         async with session_scope() as s:
@@ -111,12 +113,6 @@ async def _on_problem(run: Run, status: str, message: str, *, notify_owner: bool
                         .where(ChannelStory.channel_id == slot.channel_id, ChannelStory.story_id == slot.story_id, ChannelStory.status == StoryStatus.in_work)
                         .values(status=StoryStatus.new, reason="Пост не написан из-за ошибки, сюжет вернулся в пул")
                     )
-    if notify_owner and run.channel_id and status in (RunStatus.failed,):
-        await notify.notify_owner(
-            run.channel_id,
-            f"Запуск «{html.escape(run.title or '')}» завершился ошибкой: {html.escape(message[:300])}\n\nЕго можно повторить со страницы запуска.",
-            buttons=notify.link_buttons(f"/runs/{run.id}"),
-        )
 
 
 def _result_summary(values: dict[str, Any]) -> dict[str, Any]:
@@ -145,7 +141,7 @@ async def execute_run(run_id: str, resume: dict[str, Any] | None = None, *, inli
     tracing.set_enabled(cfg.langfuse_enabled)
     ctx = await _context_for(run)
     token = set_run(ctx)
-    graph = await graph_for(run.kind)
+    graph = await graph_for(run.kind, ctx.channel_type)
     config = {"configurable": {"thread_id": run.id}, "recursion_limit": 120}
     if resume is not None:
         inp: Any = Command(resume=resume)
@@ -188,15 +184,15 @@ async def execute_run(run_id: str, resume: dict[str, Any] | None = None, *, inli
             status = RunStatus.deferred
             delay = DEFER_STEPS[min(run.attempts - 1, len(DEFER_STEPS) - 1)]
             await _set(run.id, status=status, error=error, next_attempt_at=datetime.now(UTC) + timedelta(minutes=delay))
-        await _on_problem(run, status, error, notify_owner=not inline)
+        await _on_problem(run, status, error)
     except BudgetExceeded as exc:
         status, error = RunStatus.failed, str(exc)
         await _set(run.id, status=status, error=error, finished_at=datetime.now(UTC))
-        await _on_problem(run, status, error, notify_owner=not inline)
+        await _on_problem(run, status, error)
     except RunCancelled as exc:
         status, error = RunStatus.cancelled, str(exc)
         await _set(run.id, status=status, error=error, finished_at=datetime.now(UTC))
-        await _on_problem(run, status, error, notify_owner=not inline)
+        await _on_problem(run, status, error)
     except asyncio.CancelledError:
         if inline:
             status, error = RunStatus.failed, "Запуск не уложился в отведённое время"
@@ -208,7 +204,7 @@ async def execute_run(run_id: str, resume: dict[str, Any] | None = None, *, inli
         log.exception("run %s failed", run.id)
         status, error = RunStatus.failed, f"{type(exc).__name__}: {exc}"
         await _set(run.id, status=status, error=error[:4000], finished_at=datetime.now(UTC))
-        await _on_problem(run, status, error, notify_owner=not inline)
+        await _on_problem(run, status, error)
     finally:
         await emit("run_end", {"status": status, "error": error, "waiting": waiting})
         tracing.flush()

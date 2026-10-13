@@ -1,5 +1,6 @@
-import { Authenticated, Refine } from "@refinedev/core"
-import routerProvider, { CatchAllNavigate, NavigateToResource, UnsavedChangesNotifier } from "@refinedev/react-router"
+import { Refine } from "@refinedev/core"
+import routerProvider, { NavigateToResource, UnsavedChangesNotifier } from "@refinedev/react-router"
+import { GuestOnly, RequireAuth } from "@/components/auth-gate"
 import { ThemeProvider } from "@/components/theme"
 import { Navigate, Outlet, Route, Routes } from "react-router"
 
@@ -50,11 +51,11 @@ export default function App() {
           <Routes>
             <Route
               element={
-                <Authenticated key="app" fallback={<CatchAllNavigate to="/login" />}>
+                <RequireAuth>
                   <AppLayout>
                     <Outlet />
                   </AppLayout>
-                </Authenticated>
+                </RequireAuth>
               }
             >
               <Route index element={<NavigateToResource resource="channels" />} />
@@ -77,9 +78,9 @@ export default function App() {
             </Route>
             <Route
               element={
-                <Authenticated key="auth" fallback={<Outlet />}>
-                  <Navigate to="/" replace />
-                </Authenticated>
+                <GuestOnly>
+                  <Outlet />
+                </GuestOnly>
               }
             >
               <Route path="/login" element={<LoginPage />} />

@@ -1,13 +1,14 @@
-import { useCreate, useInvalidate } from "@refinedev/core"
+import { useInvalidate } from "@refinedev/core"
+import { useMutation } from "@tanstack/react-query"
 import { Check, Radio, Tv } from "lucide-react"
-import { useState, type FormEvent } from "react"
+import { useState } from "react"
 import { useNavigate } from "react-router"
+import { toast } from "sonner"
 
-import { PageHeader, Spinner } from "@/components/common"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
+import { TelegramConnect } from "@/components/channel/telegram-connect"
+import { PageHeader } from "@/components/common"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { api } from "@/lib/api"
 import type { Channel, ChannelType } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -33,27 +34,21 @@ const TYPES: { value: ChannelType; title: string; icon: typeof Tv; points: strin
 export function NewChannelPage() {
   const navigate = useNavigate()
   const invalidate = useInvalidate()
-  const { mutate: create, mutation } = useCreate<Channel>()
   const [type, setType] = useState<ChannelType>("smm")
-  const [title, setTitle] = useState("")
 
-  const submit = (e: FormEvent) => {
-    e.preventDefault()
-    create(
-      { resource: "channels", values: { type, title: title.trim() }, successNotification: false },
-      {
-        onSuccess: ({ data }) => {
-          invalidate({ resource: "channels", invalidates: ["list"] })
-          navigate(`/channels/${data.id}`)
-        },
-      },
-    )
-  }
+  const create = useMutation({
+    mutationFn: (username: string) => api<Channel>("/channels", { body: { type, username } }),
+    onSuccess: (c) => {
+      invalidate({ resource: "channels", invalidates: ["list"] })
+      navigate(`/channels/${c.id}`)
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
 
   return (
     <div className="mx-auto max-w-3xl">
-      <PageHeader title="Новый канал" description="Выберите тип канала. Дальше заполните бриф и подключите Telegram" />
-      <form onSubmit={submit} className="space-y-6">
+      <PageHeader title="Новый канал" description="Выберите тип канала и подключите его Telegram. Дальше заполните бриф" />
+      <div className="space-y-6">
         <div className="grid gap-4 sm:grid-cols-2">
           {TYPES.map((t) => {
             const active = type === t.value
@@ -84,25 +79,15 @@ export function NewChannelPage() {
           })}
         </div>
         <Card>
-          <CardContent className="space-y-2">
-            <Label htmlFor="title">Название в сервисе</Label>
-            <Input
-              id="title"
-              required
-              maxLength={200}
-              placeholder="Например, «Кофе без пафоса»"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-            />
-            <p className="text-xs text-muted-foreground">Видно только вам. Название Telegram-канала подтянется при подключении</p>
+          <CardHeader>
+            <CardTitle>Telegram-канал</CardTitle>
+            <CardDescription>Бот сервиса публикует посты от имени канала</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <TelegramConnect submitLabel="Создать и перейти к брифу" pending={create.isPending} onSubmit={(username) => create.mutate(username)} />
           </CardContent>
         </Card>
-        <div className="flex justify-end">
-          <Button type="submit" disabled={!title.trim() || mutation.isPending}>
-            {mutation.isPending && <Spinner />} Создать и перейти к брифу
-          </Button>
-        </div>
-      </form>
+      </div>
     </div>
   )
 }

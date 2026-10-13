@@ -61,9 +61,6 @@ class StyleStructured(BaseModel):
     length_min: int = 500
     length_max: int = 1400
     emoji_max: int = 2
-    allow_bold: bool = True
-    allow_quotes: bool = True
-    allow_lists: bool = True
     banned_phrases: list[str] = Field(default_factory=list)
     signature: str = ""
     hashtags: list[str] = Field(default_factory=list)
@@ -194,6 +191,10 @@ class SmmSchedule(BaseModel):
     days: list[int] = Field(default_factory=lambda: [0, 1, 2, 3, 4])
     windows: list[TimeWindow] = Field(default_factory=lambda: [TimeWindow()])
     timezone: TimeZoneName = "Europe/Moscow"
+
+
+def channel_schedule(channel_type: str, data: dict | None) -> NewsSchedule | SmmSchedule:
+    return (NewsSchedule if channel_type == "news" else SmmSchedule).model_validate(data or {})
 
 
 class ChannelOptions(BaseModel):

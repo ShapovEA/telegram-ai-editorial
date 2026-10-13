@@ -1,4 +1,3 @@
-import html
 import logging
 from datetime import UTC, datetime
 
@@ -8,7 +7,7 @@ from sqlalchemy import update
 
 from app.db.models import ChannelStory, Idea, LlmCall, Post, Slot
 from app.db.session import session_scope
-from app.domain.enums import IdeaStatus, PostStatus, SlotStatus, StoryStatus
+from app.domain.enums import ChannelType, IdeaStatus, PostStatus, SlotStatus, StoryStatus
 from app.graphs.common import main_source_url, node, output
 from app.graphs.context import build_ctx
 from app.graphs.post import render
@@ -17,7 +16,6 @@ from app.graphs.post.production import build_production
 from app.graphs.post.smm_head import build_smm_head
 from app.graphs.post.state import PostState
 from app.runtime.context import current_run
-from app.services import notify
 from app.services.embeddings import EmbeddingError, embed_one
 from app.services.posts_index import post_embedding_text
 
@@ -27,7 +25,6 @@ log = logging.getLogger(__name__)
 def _slot_dict(slot: Slot) -> dict:
     return {
         "id": slot.id,
-        "publish_at": slot.publish_at.isoformat(),
         "rubric": slot.rubric,
         "format": slot.format,
         "topic": slot.topic,
@@ -67,10 +64,6 @@ async def load_context(state: PostState) -> dict:
     }
 
 
-def route_by_type(state: PostState) -> str:
-    return "news_head" if state["ctx"]["type"] == "news" else "smm_head"
-
-
 def route_after_head(state: PostState) -> str:
     if state.get("outcome") or not state.get("brief"):
         return "finalize"
@@ -103,6 +96,7 @@ async def save_post(state: PostState) -> dict:
     except EmbeddingError:
         log.warning("post embedding skipped")
     async with session_scope() as s:
+        slot = await s.get(Slot, state["slot_id"])
         post = await s.get(Post, state["post_id"]) if state.get("post_id") else None
         if post is None:
             post = Post(channel_id=ctx["channel_id"], slot_id=state["slot_id"], run_id=state["run_id"])
@@ -119,12 +113,12 @@ async def save_post(state: PostState) -> dict:
         post.source_url = main_source_url(state)
         post.status = PostStatus.draft
         post.review_attempts = state.get("write_attempts") or 0
-        post.publish_at = datetime.fromisoformat(state["slot"]["publish_at"])
+        post.publish_at = slot.publish_at
         if vector is not None:
             post.embedding = vector
         await s.flush()
         post_id = post.id
-        await s.execute(update(Slot).where(Slot.id == state["slot_id"]).values(post_id=post_id))
+        slot.post_id = post_id
         await s.execute(update(LlmCall).where(LlmCall.run_id == state["run_id"], LlmCall.post_id.is_(None)).values(post_id=post_id))
     current_run().post_id = post_id
     await output("post", {"post_id": post_id, "title": title})
@@ -147,19 +141,12 @@ async def request_approval(state: PostState) -> dict:
         slot.status = SlotStatus.needs_attention if attention else SlotStatus.awaiting_approval
         if attention:
             slot.warnings = [*(slot.warnings or []), {"code": "needs_attention", "message": attention["reason"]}]
-    when = datetime.fromisoformat(state["slot"]["publish_at"]).strftime("%d.%m %H:%M")
-    header = f"Пост требует внимания: {html.escape(attention['reason'])}" if attention else "Пост ждёт одобрения"
-    await notify.notify_owner(
-        state["ctx"]["channel_id"],
-        f"{header}\n\nПубликация {when} UTC. Так он выйдет в канал:\n\n{render.approval_preview(state['formatted'])}",
-        buttons=notify.approval_buttons(post_id),
-    )
     return {}
 
 
 @node("await_approval", "Ожидание решения владельца")
 async def await_approval(state: PostState) -> dict:
-    decision = interrupt({"type": "post_approval", "post_id": state["post_id"], "deadline": state["slot"]["publish_at"]})
+    decision = interrupt({"type": "post_approval", "post_id": state["post_id"]})
     return {"decision": decision if isinstance(decision, dict) else {"action": str(decision)}}
 
 
@@ -190,10 +177,11 @@ async def prepare_revision(state: PostState) -> dict:
 
 @node("schedule", "Пост поставлен в расписание")
 async def schedule(state: PostState) -> dict:
-    publish_at = max(datetime.fromisoformat(state["slot"]["publish_at"]), datetime.now(UTC))
     async with session_scope() as s:
+        slot = await s.get(Slot, state["slot_id"])
+        publish_at = max(slot.publish_at, datetime.now(UTC))
+        slot.status = SlotStatus.scheduled
         await s.execute(update(Post).where(Post.id == state["post_id"]).values(status=PostStatus.scheduled, publish_at=publish_at))
-        await s.execute(update(Slot).where(Slot.id == state["slot_id"]).values(status=SlotStatus.scheduled))
     await output("scheduled", {"publish_at": publish_at.isoformat()})
     return {"outcome": "scheduled"}
 
@@ -239,18 +227,19 @@ async def finalize(state: PostState) -> dict:
             )
         if brief.get("idea_id") and outcome in ("skipped", "rejected"):
             await s.execute(update(Idea).where(Idea.id == brief["idea_id"]).values(status=IdeaStatus.new))
-    if outcome == "needs_attention":
-        await notify.notify_owner(ctx["channel_id"], f"Пост не написан: {html.escape(reason)}", buttons=notify.link_buttons(f"/runs/{state['run_id']}"))
     await output("outcome", {"outcome": outcome, "reason": reason})
     return {"outcome": outcome, "outcome_reason": reason}
 
 
-def build_post_graph(checkpointer=None):
+HEADS = {ChannelType.news: ("news_head", build_news_head), ChannelType.smm: ("smm_head", build_smm_head)}
+
+
+def build_post_graph(channel_type: str, checkpointer=None):
+    head, build_head = HEADS[channel_type]
     g = StateGraph(PostState)
     g.add_node("load_context", load_context)
-    g.add_node("news_head", build_news_head())
-    g.add_node("smm_head", build_smm_head())
-    g.add_node("production", build_production())
+    g.add_node(head, build_head())
+    g.add_node("production", build_production(channel_type))
     g.add_node("save_post", save_post)
     g.add_node("request_approval", request_approval)
     g.add_node("await_approval", await_approval)
@@ -258,9 +247,8 @@ def build_post_graph(checkpointer=None):
     g.add_node("schedule", schedule)
     g.add_node("finalize", finalize)
     g.add_edge(START, "load_context")
-    g.add_conditional_edges("load_context", route_by_type, ["news_head", "smm_head"])
-    g.add_conditional_edges("news_head", route_after_head, ["production", "finalize"])
-    g.add_conditional_edges("smm_head", route_after_head, ["production", "finalize"])
+    g.add_edge("load_context", head)
+    g.add_conditional_edges(head, route_after_head, ["production", "finalize"])
     g.add_conditional_edges("production", route_after_production, ["save_post", "finalize"])
     g.add_conditional_edges("save_post", route_delivery, ["schedule", "request_approval"])
     g.add_edge("request_approval", "await_approval")

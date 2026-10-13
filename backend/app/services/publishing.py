@@ -8,7 +8,7 @@ from app.db.session import session_scope
 from app.domain.enums import IdeaStatus, PostStatus, SlotStatus, StoryStatus
 from app.runtime.events import notify_channel
 from app.runtime.redis import get_redis
-from app.services import notify, telegram
+from app.services import telegram
 
 log = logging.getLogger(__name__)
 
@@ -109,4 +109,4 @@ async def _fail(post_id: int, reason: str) -> None:
                 slot.status = SlotStatus.failed
                 slot.warnings = [*(slot.warnings or []), {"code": "publish", "message": reason[:500]}]
         channel_id = post.channel_id
-    await notify.notify_owner(channel_id, f"Не удалось опубликовать пост: {reason[:300]}")
+    await notify_channel(channel_id, {"type": "post_failed", "post_id": post_id})

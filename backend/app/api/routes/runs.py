@@ -9,10 +9,10 @@ from sse_starlette.sse import EventSourceResponse
 from app.api.deps import current_user, owned_channel
 from app.api.serializers import event_out, run_out
 from app.api.utils import kick
-from app.db.models import LlmCall, Run, RunEvent, User
+from app.db.models import Channel, LlmCall, Run, RunEvent, User
 from app.db.session import get_session, session_scope
 from app.domain.enums import RunStatus
-from app.graphs.common import NODE_LABELS, cancel_key
+from app.graphs.common import cancel_key, node_label
 from app.graphs.runner import graph_for
 from app.runtime.redis import channel_feed, get_redis, run_channel
 from app.services import jobs
@@ -29,6 +29,10 @@ async def _run(session: AsyncSession, run_id: str, user: User) -> Run:
     if run.channel_id:
         await owned_channel(run.channel_id, user, session)
     return run
+
+
+async def _channel_type(session: AsyncSession, run: Run) -> str | None:
+    return await session.scalar(select(Channel.type).where(Channel.id == run.channel_id))
 
 
 @router.get("/channels/{channel_id}/runs")
@@ -50,6 +54,7 @@ async def get_run(run_id: str, user: User = Depends(current_user), session: Asyn
     calls = (await session.execute(select(LlmCall).where(LlmCall.run_id == run.id).order_by(LlmCall.created_at))).scalars().all()
     return {
         **run_out(run),
+        "channel_type": await _channel_type(session, run),
         "events": [event_out(e) for e in events],
         "llm": {
             "calls": len(calls),
@@ -155,26 +160,25 @@ async def retry_run(run_id: str, user: User = Depends(current_user), session: As
     return {"run_id": run.id}
 
 
-_graph_cache: dict[str, Any] = {}
+_graph_cache: dict[tuple[str, str | None], Any] = {}
 
 
-@router.get("/graphs/{kind}")
-async def graph_structure(kind: str, user: User = Depends(current_user)) -> dict:
-    if kind in _graph_cache:
-        return _graph_cache[kind]
-    try:
-        graph = await graph_for(kind)
-    except KeyError as exc:
-        raise HTTPException(404, "Нет такого графа") from exc
-    g = graph.get_graph(xray=1)
+@router.get("/runs/{run_id}/graph")
+async def run_graph(run_id: str, user: User = Depends(current_user), session: AsyncSession = Depends(get_session)) -> dict:
+    run = await _run(session, run_id, user)
+    channel_type = await _channel_type(session, run)
+    key = (run.kind, channel_type)
+    if key in _graph_cache:
+        return _graph_cache[key]
+    g = (await graph_for(run.kind, channel_type)).get_graph(xray=1)
     nodes = []
     for node_id in g.nodes:
         if node_id in ("__start__", "__end__") or node_id.endswith(":__start__") or node_id.endswith(":__end__"):
             nodes.append({"id": node_id, "name": node_id.split(":")[-1], "label": "Старт" if "start" in node_id else "Конец", "parent": node_id.split(":")[0] if ":" in node_id else None, "terminal": True})
             continue
         name = node_id.split(":")[-1]
-        nodes.append({"id": node_id, "name": name, "label": NODE_LABELS.get(name, name), "parent": node_id.split(":")[0] if ":" in node_id else None, "terminal": False})
+        nodes.append({"id": node_id, "name": name, "label": node_label(name, channel_type), "parent": node_id.split(":")[0] if ":" in node_id else None, "terminal": False})
     edges = [{"source": e.source, "target": e.target, "conditional": bool(e.conditional)} for e in g.edges]
-    data = {"kind": kind, "nodes": nodes, "edges": edges, "groups": {"news_head": "Голова: новости", "smm_head": "Голова: SMM", "production": "Производство поста"}}
-    _graph_cache[kind] = data
+    data = {"kind": run.kind, "nodes": nodes, "edges": edges, "groups": {"news_head": "Голова: новости", "smm_head": "Голова: SMM", "production": "Производство поста"}}
+    _graph_cache[key] = data
     return data

@@ -16,11 +16,13 @@ from app.domain.enums import (
     SlotStatus,
     StoryStatus,
 )
-from app.domain.schemas import ChannelOptions, NewsSchedule, SmmSchedule
+from app.domain.schemas import ChannelOptions, NewsSchedule, SmmSchedule, channel_schedule
 from app.graphs.runner import create_run
-from app.services.schedule import label, news_grid, next_week_start, smm_grid, week_start_for
+from app.services.schedule import label, news_grid, next_week_start, smm_grid, to_local, week_start_for
 
 log = logging.getLogger(__name__)
+
+MISSED_AFTER = timedelta(minutes=30)
 
 
 async def ensure_news_slots() -> int:
@@ -118,14 +120,17 @@ async def start_due_slots() -> list[str]:
             await s.execute(
                 select(Slot, Channel)
                 .join(Channel, Channel.id == Slot.channel_id)
-                .where(Channel.status == ChannelStatus.active, Slot.status == SlotStatus.approved, Slot.run_id.is_(None), Slot.publish_at > now - timedelta(minutes=30))
+                .where(Channel.status == ChannelStatus.active, Slot.status == SlotStatus.approved, Slot.run_id.is_(None))
                 .order_by(Slot.publish_at)
             )
         ).all()
         for slot, ch in rows:
-            if slot.publish_at - production_lead(ch) <= now:
+            if slot.publish_at <= now - MISSED_AFTER:
+                slot.status = SlotStatus.skipped
+                slot.warnings = [*(slot.warnings or []), {"code": "missed", "message": "Время выхода прошло раньше, чем пост взяли в работу"}]
+            elif slot.publish_at - production_lead(ch) <= now:
                 slot.status = SlotStatus.in_production
-                title = slot.topic or f"Пост на {label(slot.publish_at, (ch.schedule or {}).get('timezone', 'Europe/Moscow'))}"
+                title = slot.topic or f"Пост на {label(to_local(slot.publish_at, channel_schedule(ch.type, ch.schedule).timezone))}"
                 to_start.append((ch.id, slot.id, title))
     return await _start_post_runs(to_start)
 

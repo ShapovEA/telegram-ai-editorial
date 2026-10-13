@@ -1,3 +1,4 @@
+import { useInvalidate } from "@refinedev/core"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { ArrowRight, CheckCircle2, Circle, FileText, Hourglass, Loader2, Play, RefreshCw, Rocket } from "lucide-react"
 import { useEffect, useState, type ReactNode } from "react"
@@ -7,11 +8,12 @@ import { toast } from "sonner"
 import { BriefForm } from "@/components/channel/brief-form"
 import { StrategyEditor, emptyStrategy, rubricShareTotal } from "@/components/channel/strategy-editor"
 import { StyleguideEditor } from "@/components/channel/styleguide-editor"
-import { TelegramConnect } from "@/components/channel/telegram-connect"
+import { ChannelTelegram } from "@/components/channel/telegram-connect"
 import { Callout, LoadingRows, SectionHeader, Spinner, StatusBadge } from "@/components/common"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
+import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { api } from "@/lib/api"
@@ -19,6 +21,7 @@ import { briefMissing } from "@/lib/brief"
 import { fmtAgo, fmtDateTime } from "@/lib/format"
 import { postStatusLabel, runKindLabel, runStatusLabel } from "@/lib/labels"
 import type { Channel, Post, Run, Source, Strategy, Styleguide } from "@/lib/types"
+import { zonedDateTime } from "@/lib/tz"
 import { cn } from "@/lib/utils"
 import { useChannel } from "@/pages/channel/layout"
 
@@ -27,14 +30,12 @@ function SetupStep({
   title,
   description,
   done,
-  optional,
   children,
 }: {
   n: number
   title: string
   description: string
   done: boolean
-  optional?: boolean
   children: ReactNode
 }) {
   return (
@@ -50,10 +51,7 @@ function SetupStep({
             {done ? <CheckCircle2 className="size-4" /> : n}
           </span>
           <div>
-            <CardTitle>
-              {title}
-              {optional && <span className="ml-2 text-xs font-normal text-muted-foreground">можно позже</span>}
-            </CardTitle>
+            <CardTitle>{title}</CardTitle>
             <CardDescription>{description}</CardDescription>
           </div>
         </div>
@@ -72,6 +70,13 @@ function SetupWizard({ channel, refetch }: { channel: Channel; refetch: () => vo
   const missing = briefMissing(channel.brief, channel.type)
   const feedsMissing = channel.type === "news" && (sources?.length ?? 0) === 0
   const briefDone = missing.length === 0 && !feedsMissing
+  const blocker = missing.length
+    ? "Сначала заполните обязательные поля брифа."
+    : feedsMissing
+      ? "Сначала добавьте хотя бы одну RSS-ленту."
+      : !channel.telegram_connected
+        ? "Сначала подключите Telegram-канал."
+        : null
   const smm = channel.type === "smm"
 
   const start = useMutation({
@@ -96,22 +101,18 @@ function SetupWizard({ channel, refetch }: { channel: Channel; refetch: () => vo
       >
         <BriefForm channel={channel} onSaved={refetch} />
       </SetupStep>
-      <SetupStep n={2} title="Telegram" description="Бот сервиса публикует посты от имени канала" done={channel.telegram_connected} optional>
-        <TelegramConnect channel={channel} onConnected={refetch} />
-      </SetupStep>
-      <Card className={cn(briefDone && "border-primary")}>
+      {!channel.telegram_connected && (
+        <SetupStep n={2} title="Telegram" description="Бот сервиса публикует посты от имени канала, название канала берётся из Telegram" done={false}>
+          <ChannelTelegram channel={channel} onConnected={refetch} />
+        </SetupStep>
+      )}
+      <Card className={cn(!blocker && "ring-primary")}>
         <CardContent className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <div className="font-medium">Запустить отдел</div>
-            <p className="text-sm text-muted-foreground">
-              {briefDone
-                ? "Всё готово. Займёт несколько минут, за ходом работы можно следить в реальном времени."
-                : missing.length
-                  ? "Сначала заполните обязательные поля брифа."
-                  : "Сначала добавьте хотя бы одну RSS-ленту."}
-            </p>
+            <p className="text-sm text-muted-foreground">{blocker ?? "Всё готово. Займёт несколько минут, за ходом работы можно следить в реальном времени."}</p>
           </div>
-          <Button size="lg" disabled={!briefDone || start.isPending} onClick={() => start.mutate()}>
+          <Button size="lg" disabled={!!blocker || start.isPending} onClick={() => start.mutate()}>
             {start.isPending ? <Spinner /> : <Play />} {smm ? "Составить стайлгайд и стратегию" : "Составить стайлгайд"}
           </Button>
         </CardContent>
@@ -331,7 +332,7 @@ function Dashboard({ channel }: { channel: Channel }) {
                   <FileText className="size-4 shrink-0 text-muted-foreground" />
                   <span className="min-w-0 flex-1 truncate">{p.title || p.text.slice(0, 80)}</span>
                   <StatusBadge value={p.status} labels={postStatusLabel} />
-                  <span className="hidden text-xs text-muted-foreground sm:inline">{p.publish_at ? `выход ${fmtDateTime(p.publish_at)}` : ""}</span>
+                  <span className="hidden text-xs text-muted-foreground sm:inline">{p.publish_at ? `выход ${zonedDateTime(p.publish_at, channel.schedule.timezone)}` : ""}</span>
                   <ArrowRight className="size-4 text-muted-foreground" />
                 </Link>
               </li>
@@ -377,7 +378,7 @@ function Dashboard({ channel }: { channel: Channel }) {
               {upcoming.items.map((p) => (
                 <li key={p.id}>
                   <Link to={`/posts/${p.id}`} className="flex items-center gap-3 rounded-lg border p-3 hover:bg-muted/40">
-                    <div className="w-24 shrink-0 text-xs text-muted-foreground tabular-nums">{fmtDateTime(p.publish_at)}</div>
+                    <div className="w-24 shrink-0 text-xs text-muted-foreground tabular-nums">{p.publish_at && zonedDateTime(p.publish_at, channel.schedule.timezone)}</div>
                     <div className="min-w-0 flex-1 truncate text-sm">{p.title || p.text.slice(0, 80)}</div>
                   </Link>
                 </li>
@@ -390,6 +391,32 @@ function Dashboard({ channel }: { channel: Channel }) {
   )
 }
 
+function ChannelSwitch({ channel, refetch }: { channel: Channel; refetch: () => void }) {
+  const invalidate = useInvalidate()
+  const toggle = useMutation({
+    mutationFn: (active: boolean) => api<Channel>(`/channels/${channel.id}`, { method: "PATCH", body: { status: active ? "active" : "paused" } }),
+    onSuccess: (c) => {
+      toast.success(c.status === "active" ? "Канал включён" : "Канал поставлен на паузу")
+      refetch()
+      invalidate({ resource: "channels", invalidates: ["list"] })
+    },
+    onError: (e) => toast.error((e as Error).message),
+  })
+  const paused = channel.status === "paused"
+
+  return (
+    <Card className={cn("mb-6", paused && "ring-amber-500/60")}>
+      <CardContent className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <div className="font-medium">{paused ? "Канал на паузе" : "Канал работает"}</div>
+          <p className="text-sm text-muted-foreground">На паузе отдел не создаёт и не публикует посты. Запланированное остаётся.</p>
+        </div>
+        <Switch checked={!paused} disabled={toggle.isPending} onCheckedChange={(v) => toggle.mutate(v)} aria-label="Канал работает" />
+      </CardContent>
+    </Card>
+  )
+}
+
 export function ChannelOverview() {
   const { channel, refetch } = useChannel()
 
@@ -398,17 +425,13 @@ export function ChannelOverview() {
 
   return (
     <>
-      {channel.status === "paused" && (
-        <Callout tone="yellow" icon={<Hourglass />} title={<>Канал на паузе</>} className="mb-6">
-          Отдел не создаёт и не публикует посты. Включить можно в настройках канала.
-        </Callout>
-      )}
+      <ChannelSwitch channel={channel} refetch={refetch} />
       {!channel.telegram_connected && (
         <Callout tone="gray" title={<>Telegram не подключён</>} className="mb-6">
           <div className="flex flex-wrap items-center justify-between gap-2">
             Посты готовятся, но публиковать их некуда.
             <Button size="sm" variant="outline" asChild>
-              <Link to="settings">Подключить</Link>
+              <Link to="settings?section=telegram">Подключить</Link>
             </Button>
           </div>
         </Callout>

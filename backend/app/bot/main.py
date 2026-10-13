@@ -3,13 +3,12 @@ import logging
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import CommandObject, CommandStart
-from aiogram.types import CallbackQuery, Message, MessageReactionCountUpdated, Poll
-from sqlalchemy import select
+from aiogram.types import Message, MessageReactionCountUpdated, Poll
+from sqlalchemy import select, update
 
 from app.config import get_settings
-from app.db.models import Channel, Post, Run, User
+from app.db.models import Channel, Post, User
 from app.db.session import session_scope
-from app.domain.enums import AWAITING_DECISION, RunStatus
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("bot")
@@ -30,7 +29,7 @@ async def start_link(message: Message, command: CommandObject) -> None:
         user.telegram_user_id = message.from_user.id
         user.telegram_username = message.from_user.username
         user.telegram_link_code = None
-    await message.answer("Готово: аккаунт привязан. Сюда будут приходить посты на одобрение и уведомления.")
+    await message.answer("Готово: аккаунт привязан. Вернитесь в кабинет и подключите канал.")
 
 
 @router.message(CommandStart())
@@ -38,38 +37,10 @@ async def start(message: Message) -> None:
     await message.answer("Это бот AI-отдела для ведения Telegram-каналов. Привяжите аккаунт по ссылке из кабинета.")
 
 
-async def _resume(post_id: int, user_tg: int, action: str) -> str:
+@router.channel_post(F.new_chat_title)
+async def on_title(message: Message) -> None:
     async with session_scope() as s:
-        post = await s.get(Post, post_id)
-        if post is None:
-            return "Пост не найден"
-        channel = await s.get(Channel, post.channel_id)
-        owner = await s.get(User, channel.owner_id)
-        if owner.telegram_user_id != user_tg:
-            return "Это не ваш канал"
-        if post.status not in AWAITING_DECISION or not post.run_id:
-            return "Пост уже обработан"
-        run = await s.get(Run, post.run_id)
-        if run is None or run.status != RunStatus.waiting:
-            return "Пост уже обработан"
-        run_id = post.run_id
-    from app.worker.tasks import run_graph
-
-    await run_graph.kiq(run_id, {"action": action, "source": "telegram"})
-    return "Одобрено, пост поставлен в расписание" if action == "approve" else "Пост отклонён"
-
-
-@router.callback_query(F.data.regexp(r"^(approve|reject):\d+$"))
-async def on_decision(callback: CallbackQuery) -> None:
-    action, post_id = callback.data.split(":")
-    text = await _resume(int(post_id), callback.from_user.id, action)
-    await callback.answer(text, show_alert=False)
-    if callback.message:
-        try:
-            await callback.message.edit_reply_markup(reply_markup=None)
-            await callback.message.reply(text)
-        except Exception:
-            pass
+        await s.execute(update(Channel).where(Channel.telegram_chat_id == message.chat.id).values(title=message.new_chat_title))
 
 
 @router.message_reaction_count()
@@ -106,15 +77,10 @@ async def main() -> None:
         log.warning("TELEGRAM_BOT_TOKEN не задан — бот не запущен")
         while True:
             await asyncio.sleep(3600)
-    from app.worker import tasks
-    from app.worker.broker import broker
-
-    await broker.startup()
-    log.info("broker ready, task %s registered", tasks.run_graph.task_name)
     bot = Bot(token)
     dp = Dispatcher()
     dp.include_router(router)
-    await dp.start_polling(bot, allowed_updates=["message", "callback_query", "message_reaction_count", "poll", "my_chat_member"])
+    await dp.start_polling(bot, allowed_updates=["message", "channel_post", "message_reaction_count", "poll", "my_chat_member"])
 
 
 if __name__ == "__main__":

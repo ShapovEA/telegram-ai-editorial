@@ -4,6 +4,7 @@ import logging
 from langgraph.graph import END, START, StateGraph
 
 from app.agents.schemas import DRAFT_SCHEMAS, GoalCheckAnswer, PublisherAnswer, ResearchReport, Review
+from app.domain.enums import ChannelType
 from app.domain.schemas import Styleguide
 from app.graphs.common import (
     allowed_urls,
@@ -126,7 +127,7 @@ async def researcher(state: PostState) -> dict:
 
 def route_after_research(state: PostState) -> str:
     brief = state.get("brief") or {}
-    if brief.get("mode") == "smm" and not state.get("goal_checked") and brief.get("key_idea"):
+    if not state.get("goal_checked") and brief.get("key_idea"):
         return "goal_check"
     return "writer"
 
@@ -409,10 +410,9 @@ def route_after_publisher(state: PostState) -> str:
     return "media" if fmt == "text" else END
 
 
-def build_production():
+def build_production(channel_type: str):
     g = StateGraph(PostState)
     g.add_node("researcher", researcher)
-    g.add_node("goal_check", goal_check)
     g.add_node("writer", writer)
     g.add_node("force_writer", force_writer)
     g.add_node("no_facts", no_facts)
@@ -422,8 +422,12 @@ def build_production():
     g.add_node("publisher", publisher)
     g.add_node("media", make_media)
     g.add_conditional_edges(START, route_entry, ["researcher", "writer"])
-    g.add_conditional_edges("researcher", route_after_research, ["goal_check", "writer"])
-    g.add_conditional_edges("goal_check", route_after_goal, ["writer", END])
+    if channel_type == ChannelType.smm:
+        g.add_node("goal_check", goal_check)
+        g.add_conditional_edges("researcher", route_after_research, ["goal_check", "writer"])
+        g.add_conditional_edges("goal_check", route_after_goal, ["writer", END])
+    else:
+        g.add_edge("researcher", "writer")
     g.add_conditional_edges("writer", route_after_writer, ["researcher", "force_writer", "no_facts", "auto_checks"])
     g.add_edge("force_writer", "writer")
     g.add_edge("no_facts", END)

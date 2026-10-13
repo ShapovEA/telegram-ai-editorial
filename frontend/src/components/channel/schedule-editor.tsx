@@ -64,7 +64,7 @@ export function ScheduleEditor({ type, value, onChange }: { type: ChannelType; v
               </div>
             ))}
           </div>
-          <p className="text-xs text-muted-foreground">В каждое время шеф-редактор выбирает лучший свежий сюжет. Если сюжетов нет, слот пропускается или занимается вечнозелёной темой.</p>
+          <p className="text-xs text-muted-foreground">В каждое время шеф-редактор выбирает лучший свежий сюжет. Если сюжетов нет, слот пропускается или занимается общей темой.</p>
         </div>
         <Timezone value={s.timezone} onChange={(timezone) => onChange({ ...s, timezone })} />
       </div>

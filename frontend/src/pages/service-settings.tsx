@@ -71,7 +71,7 @@ function GeneralTab({ s }: { s: ServiceSettings }) {
         <CardContent>
           <ul className="divide-y">
             <Integration name="OpenRouter" ok={s.openrouter_configured} hint="OPENROUTER_API_KEY — без него агенты не работают" />
-            <Integration name="Telegram-бот" ok={s.telegram_configured} hint="TELEGRAM_BOT_TOKEN — публикация и согласование. Если токен задан, но здесь «не настроен», токен неверный" />
+            <Integration name="Telegram-бот" ok={s.telegram_configured} hint="TELEGRAM_BOT_TOKEN — публикация в каналы и проверка прав при подключении. Если токен задан, но здесь «не настроен», токен неверный" />
             <Integration name="Pexels" ok={s.pexels_configured} hint="PEXELS_API_KEY — стоковые фото к постам, необязательно" />
             <Integration name="Langfuse" ok={s.langfuse_configured} hint="LANGFUSE_PUBLIC_KEY и LANGFUSE_SECRET_KEY" />
           </ul>

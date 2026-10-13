@@ -26,10 +26,11 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
 import { api } from "@/lib/api"
-import { fmtDateTime, fmtNumber, fmtUsd } from "@/lib/format"
+import { fmtNumber, fmtUsd } from "@/lib/format"
 import { formatLabel, postStatusLabel, roleLabel } from "@/lib/labels"
 import { sanitizeTelegramHtml } from "@/lib/sanitize"
 import type { Post, Role } from "@/lib/types"
+import { zonedDateTime } from "@/lib/tz"
 import { cn } from "@/lib/utils"
 
 type QualityIssue = { code: string; message: string; fragment: string; critical: boolean; suggestion: string }
@@ -39,7 +40,7 @@ type PostDetail = Post & {
   run_status: string | null
   revisions_left: number | null
   quality: { issues: QualityIssue[]; critical: number }
-  channel: { id: number; title: string; type: string; publish_mode: string }
+  channel: { id: number; title: string; type: string; publish_mode: string; timezone: string }
 }
 
 type Fact = { claim?: string; source_url?: string; quote?: string; value?: string }
@@ -98,7 +99,9 @@ function TelegramPreview({ post }: { post: PostDetail }) {
         )}
         <div className="flex items-center justify-end gap-3 px-3 pb-2 text-[11px] text-muted-foreground">
           {post.reactions_total > 0 && <span>реакций {post.reactions_total}</span>}
-          <span>{post.published_at ? fmtDateTime(post.published_at) : post.publish_at ? `выйдет ${fmtDateTime(post.publish_at)}` : ""}</span>
+          <span>
+            {post.published_at ? zonedDateTime(post.published_at, post.channel.timezone) : post.publish_at ? `выйдет ${zonedDateTime(post.publish_at, post.channel.timezone)}` : ""}
+          </span>
         </div>
       </div>
     </div>

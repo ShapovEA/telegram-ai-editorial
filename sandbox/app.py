@@ -48,7 +48,13 @@ def run(req: RunRequest) -> dict:
             (work / safe).write_text(content, encoding="utf-8")
         script = work / "main.py"
         script.write_text(PRELUDE + req.code, encoding="utf-8")
-        env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": workdir, "MPLCONFIGDIR": workdir, "PYTHONIOENCODING": "utf-8"}
+        env = {
+            "PATH": "/usr/local/bin:/usr/bin:/bin",
+            "HOME": workdir,
+            "MPLCONFIGDIR": workdir,
+            "PYTHONIOENCODING": "utf-8",
+            "OPENBLAS_NUM_THREADS": "1",
+        }
         started = time.monotonic()
         try:
             proc = subprocess.run(

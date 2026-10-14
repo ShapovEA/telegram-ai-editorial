@@ -28,7 +28,7 @@ def _get_client():
     try:
         from langfuse import Langfuse
 
-        _client = Langfuse(public_key=s.langfuse_public_key, secret_key=s.langfuse_secret_key, host=s.langfuse_host)
+        _client = Langfuse(public_key=s.langfuse_public_key, secret_key=s.langfuse_secret_key, base_url=s.langfuse_base_url)
     except Exception:
         log.warning("langfuse init failed", exc_info=True)
         _client = None

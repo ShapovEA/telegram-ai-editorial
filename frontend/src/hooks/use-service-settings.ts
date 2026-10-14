@@ -9,7 +9,7 @@ export type ServiceSettings = {
   extra_stamps: string[]
   latin_whitelist: string[]
   langfuse_configured: boolean
-  langfuse_host: string
+  langfuse_base_url: string
   openrouter_configured: boolean
   telegram_configured: boolean
   telegram_bot_username: string

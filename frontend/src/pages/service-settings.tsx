@@ -85,7 +85,7 @@ function GeneralTab({ s }: { s: ServiceSettings }) {
               <p className="text-sm text-muted-foreground">Для всех каналов. Учёт расходов и события запусков ведутся в своей базе независимо от этого.</p>
               {s.langfuse_configured && (
                 <a
-                  href={s.langfuse_host}
+                  href={s.langfuse_base_url}
                   target="_blank"
                   rel="noreferrer noopener"
                   className="mt-1 inline-flex items-center gap-1 text-sm text-sky-600 hover:underline dark:text-sky-400"

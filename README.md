@@ -210,7 +210,7 @@ docker compose up -d --build
 | `TELEGRAM_BOT_TOKEN` | да | Подключение каналов, публикация, реакции. Без него контейнер `bot` простаивает, и канал в кабинете подключить нельзя |
 | `APP_SECRET` | да | Подпись токенов входа |
 | `PEXELS_API_KEY` | нет | Стоковые изображения. Без ключа посты выходят без них |
-| `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST` | нет | Трассировка в Langfuse. Хост по умолчанию: `https://cloud.langfuse.com` |
+| `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL` | нет | Трассировка в Langfuse. Адрес по умолчанию: `https://cloud.langfuse.com` |
 | `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `SEARXNG_SECRET` | нет | Заданы значения по умолчанию. Порты баз данных доступны только с `127.0.0.1`, но при размещении на сервере пароли нужно заменить |
 
 Порты, доступные на хосте:

@@ -2,6 +2,8 @@ import logging
 from contextlib import asynccontextmanager, contextmanager
 from typing import Any
 
+from langgraph.errors import GraphBubbleUp
+
 from app.config import get_settings
 
 log = logging.getLogger(__name__)
@@ -59,6 +61,9 @@ def observe(name: str, as_type: str = "span", **kwargs: Any):
         return
     try:
         yield obs
+    except GraphBubbleUp:
+        cm.__exit__(None, None, None)
+        raise
     except BaseException as exc:
         try:
             obs.update(level="ERROR", status_message=str(exc)[:500])
@@ -75,7 +80,7 @@ async def trace_run(name: str, *, run_id: str, channel_id: int | None, kind: str
     if not is_active():
         yield _NoopObservation()
         return
-    from langfuse import propagate_attributes
+    from langfuse import Langfuse, propagate_attributes
 
     with propagate_attributes(
         session_id=f"channel-{channel_id}" if channel_id else None,
@@ -84,7 +89,8 @@ async def trace_run(name: str, *, run_id: str, channel_id: int | None, kind: str
         metadata={"run_id": run_id},
         trace_name=name,
     ):
-        with observe(name, as_type="agent", input=input, metadata={"run_id": run_id}) as obs:
+        trace_context = {"trace_id": Langfuse.create_trace_id(seed=run_id)}
+        with observe(name, as_type="agent", input=input, metadata={"run_id": run_id}, trace_context=trace_context) as obs:
             yield obs
 
 

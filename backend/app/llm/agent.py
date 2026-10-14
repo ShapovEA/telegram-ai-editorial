@@ -22,6 +22,10 @@ class BadOutput(LLMError):
     pass
 
 
+class ToolFailed(Exception):
+    pass
+
+
 def _clean_schema(node: Any, in_properties: bool = False, defs: dict[str, Any] | None = None) -> Any:
     if isinstance(node, list):
         return [_clean_schema(x, False, defs) for x in node]
@@ -151,12 +155,17 @@ async def _run_tool(tool: AgentTool, call_id: str, raw_args: str) -> str:
     label = tool.label(args) if tool.label else tool.name
     await emit("tool_call", {"call_id": call_id, "tool": tool.name, "label": label, "args": args.model_dump()})
     with tracing.observe(f"tool:{tool.name}", as_type="tool", input=args.model_dump()) as obs:
+        error = None
         try:
             output = await tool.handler(args)
+        except ToolFailed as exc:
+            output = error = str(exc)
         except Exception as exc:
             log.warning("tool %s failed", tool.name, exc_info=True)
-            output = f"Ошибка инструмента {tool.name}: {exc}"
+            output = error = f"Ошибка инструмента {tool.name}: {exc}"
         obs.update(output=output[:4000])
+        if error:
+            obs.update(level="ERROR", status_message=error[:500])
     if len(output) > TOOL_RESULT_LIMIT:
         output = output[:TOOL_RESULT_LIMIT] + "\n[...обрезано...]"
     await emit("tool_result", {"call_id": call_id, "tool": tool.name, "label": label, "preview": output[:1500], "size": len(output)})

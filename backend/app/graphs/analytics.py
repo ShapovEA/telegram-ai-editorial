@@ -1,6 +1,7 @@
 import json
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, TypedDict
+from zoneinfo import ZoneInfo
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
@@ -10,7 +11,7 @@ from sqlalchemy import select
 from app.db.models import AnalyticsReport, Channel, ChannelDocVersion, MediaFile, Post
 from app.db.session import session_scope
 from app.domain.enums import PostStatus
-from app.domain.schemas import Strategy
+from app.domain.schemas import Strategy, channel_schedule
 from app.graphs.common import block, join_blocks, node, output, system_prompt
 from app.graphs.context import build_ctx
 from app.llm.agent import ask, run_agent
@@ -35,6 +36,7 @@ class AnalyticsState(TypedDict, total=False):
     channel_id: int
     days: int
     ctx: dict[str, Any]
+    timezone: str
     posts: list[dict[str, Any]]
     report: dict[str, Any]
     report_id: int
@@ -48,30 +50,34 @@ async def collect_stats(state: AnalyticsState) -> dict:
     ctx = await build_ctx(state["channel_id"])
     since = datetime.now(UTC) - timedelta(days=state.get("days") or 30)
     async with session_scope() as s:
+        ch = await s.get(Channel, state["channel_id"])
         rows = (
             await s.execute(
                 select(Post).where(Post.channel_id == state["channel_id"], Post.status == PostStatus.published, Post.published_at >= since).order_by(Post.published_at)
             )
         ).scalars().all()
-    posts = [
-        {
-            "id": p.id,
-            "title": p.title or p.text[:60],
-            "rubric": p.rubric or "без рубрики",
-            "format": p.format,
-            "published_at": p.published_at.isoformat() if p.published_at else None,
-            "weekday": p.published_at.weekday() if p.published_at else None,
-            "hour": p.published_at.hour if p.published_at else None,
-            "reactions": p.reactions_total,
-            "reactions_by_type": p.reactions,
-            "poll": p.poll_results,
-            "rating": p.rating,
-            "synthetic": p.synthetic,
-        }
-        for p in rows
-    ]
+    timezone = channel_schedule(ch.type, ch.schedule).timezone
+    posts = []
+    for p in rows:
+        local = p.published_at.astimezone(ZoneInfo(timezone))
+        posts.append(
+            {
+                "id": p.id,
+                "title": p.title or p.text[:60],
+                "rubric": p.rubric or "без рубрики",
+                "format": p.format,
+                "published_at": local.isoformat(timespec="minutes"),
+                "weekday": local.weekday(),
+                "hour": local.hour,
+                "reactions": p.reactions_total,
+                "reactions_by_type": p.reactions,
+                "poll": p.poll_results,
+                "rating": p.rating,
+                "synthetic": p.synthetic,
+            }
+        )
     await output("stats", {"posts": len(posts), "synthetic": sum(1 for p in posts if p["synthetic"])})
-    return {"ctx": ctx, "posts": posts}
+    return {"ctx": ctx, "timezone": timezone, "posts": posts}
 
 
 @node("analyst", "Аналитик считает статистику кодом")
@@ -80,11 +86,12 @@ async def analyst(state: AnalyticsState) -> dict:
     posts = state["posts"]
     images: list[bytes] = []
     runs: list[dict] = []
-    tool = agent_tools.analyst_python_tool({"posts.json": json.dumps(posts, ensure_ascii=False)}, images, runs)
+    tool = agent_tools.analyst_python_tool(posts, images, runs)
     system = await system_prompt(ctx, "analyst")
     synthetic_note = "Часть данных синтетическая (демо-история): отметь это в summary." if any(p["synthetic"] for p in posts) else ""
     user = join_blocks(
-        f"Период: последние {state.get('days') or 30} дней. Постов: {len(posts)}. {synthetic_note}",
+        f"Период: последние {state.get('days') or 30} дней. Постов: {len(posts)}. "
+        f"Дата, день недели и час публикации в posts.json — по местному времени канала ({state['timezone']}). {synthetic_note}",
         block("СТРАТЕГИЯ", Strategy.model_validate(ctx["strategy"] or {}).render()),
         "Посчитай метрики кодом и верни отчёт инструментом report.",
     )

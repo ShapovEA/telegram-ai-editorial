@@ -154,7 +154,7 @@ async def execute_run(run_id: str, resume: dict[str, Any] | None = None, *, inli
         await notify_channel(run.channel_id, {"type": "run_status", "run_id": run.id, "status": RunStatus.running})
     await emit("run_start", {"kind": run.kind, "title": run.title, "resume": resume, "attempt": run.attempts})
     try:
-        async with tracing.trace_run(f"{run.kind}: {run.title}", run_id=run.id, channel_id=run.channel_id, kind=run.kind, input=run.input) as obs:
+        async with tracing.trace_run(f"{run.kind}: {run.title}", run_id=run.id, channel_id=run.channel_id, kind=run.kind, input=run.input if resume is None else resume) as obs:
             async for chunk in graph.astream(inp, config, stream_mode="updates"):
                 if "__interrupt__" in chunk:
                     intr = chunk["__interrupt__"]

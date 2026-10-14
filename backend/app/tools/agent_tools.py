@@ -6,7 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from app.llm.agent import AgentTool
+from app.llm.agent import AgentTool, ToolFailed
 from app.security import injection
 from app.services.embeddings import EmbeddingError, embed_one
 from app.services.posts_index import similar_posts
@@ -69,7 +69,7 @@ def read_page_tool(session: ResearchSession) -> AgentTool:
             try:
                 page = await pages.read_page(url)
             except pages.PageError as exc:
-                return f"Не удалось открыть страницу: {exc}"
+                raise ToolFailed(f"Не удалось открыть страницу: {exc}") from exc
             verdict = await injection.check(page.text, source=url)
             if verdict.injection:
                 session.rejected[url] = f"попытка инъекции ({verdict.reason})"
@@ -84,11 +84,11 @@ def read_page_tool(session: ResearchSession) -> AgentTool:
 def past_posts_tool(session: ResearchSession) -> AgentTool:
     async def handler(args: PastPostsArgs) -> str:
         if session.channel_id is None:
-            return "Архив недоступен."
+            raise ToolFailed("Архив недоступен.")
         try:
             vector = await embed_one(args.query)
         except EmbeddingError as exc:
-            return f"Архив недоступен: {exc}"
+            raise ToolFailed(f"Архив недоступен: {exc}") from exc
         posts = await similar_posts(session.channel_id, vector, limit=5)
         posts = [p for p in posts if p["similarity"] >= 0.45]
         if not posts:
@@ -105,29 +105,53 @@ def calculate_tool(session: ResearchSession) -> AgentTool:
         try:
             result = await sandbox.run_python(args.code, timeout=10)
         except sandbox.SandboxError as exc:
-            return f"Вычисление недоступно: {exc}"
+            raise ToolFailed(f"Вычисление недоступно: {exc}") from exc
         output = result.summary(1500)
         session.calculations.append({"description": args.description, "code": args.code, "output": result.stdout.strip()[:1500], "ok": result.ok})
-        return output if result.ok else f"Ошибка выполнения:\n{output}"
+        if not result.ok:
+            raise ToolFailed(f"Ошибка выполнения:\n{output}")
+        return output
 
-    return AgentTool("calculate", "Выполняет Python-код и возвращает напечатанный результат. Для любых производных чисел.", CalculateArgs, handler, lambda a: f"Расчёт: {a.description}")
+    return AgentTool(
+        "calculate",
+        "Выполняет Python-код и возвращает напечатанный результат. Для любых производных чисел. "
+        "Каждый вызов — отдельный запуск с чистого листа: переменные и импорты прошлых вызовов не сохраняются.",
+        CalculateArgs,
+        handler,
+        lambda a: f"Расчёт: {a.description}",
+    )
 
 
 class PythonArgs(BaseModel):
-    code: str = Field(description="Python-код. Данные — в файле posts.json. Графики сохраняй в png через matplotlib.")
+    code: str = Field(description="Python-код. Посты уже загружены в posts и df. Графики сохраняй в png через matplotlib.")
 
 
-def analyst_python_tool(files: dict[str, str], images: list[bytes], log_runs: list[dict[str, Any]]) -> AgentTool:
+POSTS_PRELUDE = "import json\nimport pandas as pd\nposts = json.load(open('posts.json', encoding='utf-8'))\ndf = pd.DataFrame(posts)\n"
+
+
+def analyst_python_tool(posts: list[dict[str, Any]], images: list[bytes], log_runs: list[dict[str, Any]]) -> AgentTool:
+    files = {"posts.json": json.dumps(posts, ensure_ascii=False)}
+
     async def handler(args: PythonArgs) -> str:
         try:
-            result = await sandbox.run_python(args.code, files=files, timeout=40)
+            result = await sandbox.run_python(POSTS_PRELUDE + args.code, files=files, timeout=40)
         except sandbox.SandboxError as exc:
-            return f"Песочница недоступна: {exc}"
+            raise ToolFailed(f"Песочница недоступна: {exc}") from exc
         images.extend(result.images)
         log_runs.append({"code": args.code, "stdout": result.stdout[:3000], "ok": result.ok, "images": len(result.images)})
-        return result.summary(6000)
+        output = result.summary(6000)
+        if not result.ok:
+            raise ToolFailed(output)
+        return output
 
-    return AgentTool("python", "Выполняет Python-код в песочнице без интернета.", PythonArgs, handler, lambda a: "Расчёт в Python")
+    return AgentTool(
+        "python",
+        "Выполняет Python-код в песочнице без интернета. В начале каждого вызова уже загружены posts — список постов из posts.json — "
+        "и df — pandas.DataFrame по ним. Каждый вызов — отдельный запуск: остальные переменные и импорты прошлых вызовов не сохраняются.",
+        PythonArgs,
+        handler,
+        lambda a: "Расчёт в Python",
+    )
 
 
 def images_to_b64(images: list[bytes]) -> list[str]:

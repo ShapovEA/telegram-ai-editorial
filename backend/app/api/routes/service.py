@@ -36,7 +36,7 @@ async def get_settings_(user: User = Depends(current_user)) -> dict:
     return {
         **cfg.model_dump(),
         "langfuse_configured": bool(s.langfuse_public_key and s.langfuse_secret_key),
-        "langfuse_host": s.langfuse_host,
+        "langfuse_base_url": s.langfuse_base_url,
         "openrouter_configured": bool(s.openrouter_api_key),
         "telegram_configured": bool(bot_username),
         "telegram_bot_username": bot_username,

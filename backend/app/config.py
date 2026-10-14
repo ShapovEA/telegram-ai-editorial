@@ -35,7 +35,7 @@ class Settings(BaseSettings):
 
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
-    langfuse_host: str = "https://cloud.langfuse.com"
+    langfuse_base_url: str = "https://cloud.langfuse.com"
 
     search_cache_ttl_seconds: int = 24 * 3600
     search_min_interval_seconds: float = 1.5

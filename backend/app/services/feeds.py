@@ -16,7 +16,7 @@ from app.db.models import Channel, ChannelSource, ChannelStory, FeedItem, Source
 from app.db.session import session_scope
 from app.domain.enums import ChannelStatus, SourceStatus, StoryStatus
 from app.domain.schemas import Brief
-from app.runtime.redis import get_redis
+from app.runtime.redis import get_redis, owned_lock
 from app.services.embeddings import EmbeddingError, cosine, embed, embed_one
 from app.services.novelty import POST_SAME, STORY_GRAY, STORY_SAME, same_event
 from app.services.posts_index import similar_posts
@@ -29,7 +29,6 @@ COMMON_PATHS = ["/feed", "/rss", "/rss.xml", "/feed.xml", "/atom.xml", "/index.x
 RELEVANCE_MIN = 0.33
 MAX_NEW_PER_FETCH = 30
 MAX_TEXT = 20000
-FETCH_LOCK_SECONDS = 600
 
 
 def url_hash(url: str) -> str:
@@ -180,16 +179,14 @@ async def _assign_story(item: FeedItem, vector: list[float], session) -> tuple[S
 
 
 async def fetch_source(source_id: int) -> dict[str, Any]:
-    redis = get_redis()
     key = f"feed:lock:{source_id}"
-    if not await redis.set(key, "1", nx=True, ex=FETCH_LOCK_SECONDS):
-        while await redis.exists(key):
-            await asyncio.sleep(2)
-        return {"new": 0}
-    try:
-        return await _fetch_source(source_id)
-    finally:
-        await redis.delete(key)
+    async with owned_lock(key) as acquired:
+        if acquired:
+            return await _fetch_source(source_id)
+    redis = get_redis()
+    while await redis.exists(key):
+        await asyncio.sleep(2)
+    return {"new": 0}
 
 
 async def _fetch_source(source_id: int) -> dict[str, Any]:

@@ -32,7 +32,7 @@ class Issue:
 
 
 @lru_cache(maxsize=1)
-def _morph():
+def morph():
     import pymorphy3
 
     return pymorphy3.MorphAnalyzer(lang="ru")
@@ -43,7 +43,7 @@ def lemma(word: str) -> str:
     w = word.lower().replace("ё", "е")
     if not re.match(r"[а-я]", w):
         return w
-    return _morph().parse(w)[0].normal_form.replace("ё", "е")
+    return morph().parse(w)[0].normal_form.replace("ё", "е")
 
 
 @lru_cache(maxsize=50_000)
@@ -51,7 +51,7 @@ def pos(word: str) -> str | None:
     w = word.lower()
     if not re.match(r"[а-яё]", w):
         return None
-    return _morph().parse(w)[0].tag.POS
+    return morph().parse(w)[0].tag.POS
 
 
 def _tokens(text: str) -> list[tuple[str, int, int]]:

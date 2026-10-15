@@ -15,10 +15,12 @@ scheduler = TaskiqScheduler(broker=broker, sources=[LabelScheduleSource(broker)]
 @broker.on_event(TaskiqEvents.WORKER_STARTUP)
 async def startup(state: TaskiqState) -> None:
     from app.graphs.checkpointer import get_checkpointer
+    from app.quality.detector import morph
     from app.services.service_settings import ensure_service_settings
 
     await ensure_service_settings()
     await get_checkpointer()
+    morph()
 
 
 @broker.on_event(TaskiqEvents.WORKER_SHUTDOWN)

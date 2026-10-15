@@ -18,12 +18,14 @@ async def lifespan(app: FastAPI):
     from app.graphs.checkpointer import close_checkpointer, get_checkpointer
     from app.llm.catalog import get_catalog, sync_catalog
     from app.observability import tracing
+    from app.quality.detector import morph
     from app.services.service_settings import ensure_service_settings, get_service_config
     from app.worker.broker import broker
 
     await ensure_service_settings()
     tracing.set_enabled((await get_service_config()).langfuse_enabled)
     await get_checkpointer()
+    morph()
     if not broker.is_worker_process:
         await broker.startup()
     try:

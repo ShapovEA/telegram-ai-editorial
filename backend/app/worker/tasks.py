@@ -10,19 +10,15 @@ log = logging.getLogger(__name__)
 @broker.task(task_name="run_graph", timeout=3600)
 async def run_graph(run_id: str, resume: dict[str, Any] | None = None) -> str:
     from app.graphs.runner import execute_run
-    from app.runtime.redis import get_redis
+    from app.runtime.redis import owned_lock
 
-    redis = get_redis()
-    lock = f"run:lock:{run_id}"
-    if not await redis.set(lock, "1", nx=True, ex=3600):
-        if resume is not None:
-            await asyncio.sleep(10)
-            await run_graph.kiq(run_id, resume)
-        return "busy"
-    try:
-        return await execute_run(run_id, resume)
-    finally:
-        await redis.delete(lock)
+    async with owned_lock(f"run:lock:{run_id}") as acquired:
+        if acquired:
+            return await execute_run(run_id, resume)
+    if resume is not None:
+        await asyncio.sleep(10)
+        await run_graph.kiq(run_id, resume)
+    return "busy"
 
 
 @broker.task(task_name="fetch_feed", timeout=600)
